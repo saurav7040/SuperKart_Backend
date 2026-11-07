@@ -2,34 +2,21 @@ const express = require("express");
 const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
-
 const userController = require("../controllers/userController");
-
-// Check imported functions
-console.log("User Controller:", {
-    getProfile: typeof userController.getProfile,
-    updateProfile: typeof userController.updateProfile,
-    requestPasswordOtp: typeof userController.requestPasswordOtp,
-    changePassword: typeof userController.changePassword,
-    authMiddleware: typeof authMiddleware
-});
 
 // Authentication required for all user APIs
 router.use(authMiddleware);
 
-// User APIs
+// User Profile APIs
 router.get("/profile", userController.getProfile);
-
 router.put("/profile", userController.updateProfile);
 
-router.post(
-    "/change-password/request-otp",
-    userController.requestPasswordOtp
-);
+// Mobile / Email Update with OTP Verification
+router.post("/update-contact/send-otp", userController.updateContactSendOtp);
+router.post("/update-contact/confirm", userController.updateContactConfirm);
 
-router.put(
-    "/change-password",
-    userController.changePassword
-);
+// Password Change APIs
+router.post("/change-password/request-otp", userController.requestPasswordOtp);
+router.put("/change-password", userController.changePassword);
 
 module.exports = router;
