@@ -1,6 +1,21 @@
 const crypto = require("crypto");
 const { pool } = require("../config/db");
 
+// Dynamic Delivery Date Helper (Calculates NOW + 4 Days dynamically)
+const getDynamicDeliveryDate = () => {
+    const deliveryDate = new Date();
+    deliveryDate.setDate(deliveryDate.getDate() + 4);
+
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const dayName = days[deliveryDate.getDay()];
+    const dayNum = String(deliveryDate.getDate()).padStart(2, '0');
+    const monthName = months[deliveryDate.getMonth()];
+
+    return `Delivered by ${dayName}, ${dayNum}th ${monthName}`;
+};
+
 // ======================================
 // 1. PLACE NEW ORDER (STEP 3 CHECKOUT)
 // POST /api/v1/orders/place-order
@@ -27,6 +42,7 @@ const placeOrder = async (req, res) => {
 
         // Generate clean Order ID e.g. SK-849201
         const orderId = "SK-" + crypto.randomInt(100000, 999999).toString();
+        const estimatedDelivery = getDynamicDeliveryDate();
 
         await client.query("BEGIN");
 
@@ -58,7 +74,7 @@ const placeOrder = async (req, res) => {
             [
                 userId,
                 "🎉 Order Confirmed!",
-                `Your order #${orderId} for ₹${orderTotal} has been placed successfully and is being processed for delivery.`,
+                `Your order #${orderId} for ₹${orderTotal} has been placed successfully. ${estimatedDelivery}.`,
                 "order",
                 "Just now"
             ]
@@ -73,7 +89,7 @@ const placeOrder = async (req, res) => {
             orderTotal: parseFloat(orderTotal),
             paymentMethod: paymentMethod,
             status: "CONFIRMED",
-            estimatedDelivery: "Delivered by Wednesday, 04th Nov"
+            estimatedDelivery: estimatedDelivery
         });
 
     } catch (error) {
