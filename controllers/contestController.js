@@ -16,7 +16,7 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
-        // Query active contest joined by user or latest active contest
+        // Query active contest joined by user
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.joined_count, c.unlocks_at, c.status,
@@ -79,21 +79,31 @@ const joinContest = async (req, res) => {
         const userId = req.user.userId;
         const { contestId, productId, entryFee } = req.body;
 
-        const effectiveContestId = contestId || 'cnt_sole_mates_101';
+        const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
+        const cId = contestId || `cnt_${pId}_${userId}`;
+
+        // Get product details
+        const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [pId]);
+        const product = productRes.rows[0];
+
+        const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
+        const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
+
+        // Upsert contest campaign for this product
+        await pool.query(
+            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
+             ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
+            [cId, pId, title, subtitle, fee, fee * 2, 2846]
+        );
 
         // Record user entry in user_contest_entries
         await pool.query(
             `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (user_id, contest_id) DO NOTHING`,
-            [userId, effectiveContestId, fee, fee * 2]
-        );
-
-        // Increment joined count in contests
-        await pool.query(
-            "UPDATE contests SET joined_count = joined_count + 1 WHERE id = $1",
-            [effectiveContestId]
+            [userId, cId, fee, fee * 2]
         );
 
         // Dispatch Notification
@@ -112,7 +122,7 @@ const joinContest = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: "Joined contest successfully!",
-            contestId: effectiveContestId
+            contestId: cId
         });
 
     } catch (error) {
