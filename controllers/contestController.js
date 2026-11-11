@@ -1,7 +1,7 @@
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET MY ACTIVE CONTEST ENTRY
+// 1. GET MY ACTIVE CONTEST ENTRIES (Supports multiple joined contests & real joined_count!)
 // GET /api/v1/contests/my-active
 // ======================================
 const getMyActiveContest = async (req, res) => {
@@ -12,11 +12,12 @@ const getMyActiveContest = async (req, res) => {
             return res.status(200).json({
                 success: true,
                 message: "No active contest for guest user",
+                contests: [],
                 contest: null
             });
         }
 
-        // Query active contest joined by user
+        // Query ALL active contests joined by user
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.joined_count, c.unlocks_at, c.status,
@@ -27,7 +28,6 @@ const getMyActiveContest = async (req, res) => {
             LEFT JOIN products p ON c.product_id = p.id
             WHERE e.user_id = $1 AND c.status = 'ACTIVE'
             ORDER BY e.created_at DESC
-            LIMIT 1
         `;
 
         const result = await pool.query(query, [userId]);
@@ -36,36 +36,37 @@ const getMyActiveContest = async (req, res) => {
             return res.status(200).json({
                 success: true,
                 message: "No active contests joined yet",
+                contests: [],
                 contest: null
             });
         }
 
-        const row = result.rows[0];
-        const formattedContest = {
+        const formattedContests = result.rows.map(row => ({
             id: row.id,
             shoeTitle: row.title,
             shoeSubtitle: row.subtitle,
             imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
             winOfferPrice: parseFloat(row.entry_fee),
-            joinedUsersCount: parseInt(row.joined_count || 2846),
+            joinedUsersCount: parseInt(row.joined_count || 1),
             unlocksAt: row.unlocks_at,
             isScratchable: row.is_scratchable || false,
             isScratched: row.is_scratched || false,
             isWinner: row.is_winner || false,
             voucherAmount: parseFloat(row.voucher_amount || 200.0)
-        };
+        }));
 
         return res.status(200).json({
             success: true,
-            message: "Active contest pass fetched successfully",
-            contest: formattedContest
+            message: "Active contest passes fetched successfully",
+            contests: formattedContests,
+            contest: formattedContests[0]
         });
 
     } catch (error) {
         console.error("Get Active Contest Error:", error.message);
         return res.status(500).json({
             success: false,
-            message: "Unable to fetch active contest"
+            message: "Unable to fetch active contests"
         });
     }
 };
@@ -90,12 +91,12 @@ const joinContest = async (req, res) => {
         const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
         const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
 
-        // Upsert contest campaign for this product
+        // Upsert contest campaign for this product (Real joined count starts at 1 and increments on conflict!)
         await pool.query(
             `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
+             VALUES ($1, $2, $3, $4, $5, $6, 1, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
              ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
-            [cId, pId, title, subtitle, fee, fee * 2, 2846]
+            [cId, pId, title, subtitle, fee, fee * 2]
         );
 
         // Record user entry in user_contest_entries
