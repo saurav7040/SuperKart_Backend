@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { pool } = require("../config/db");
 
 // ======================================
@@ -228,41 +230,41 @@ const clearCart = async (req, res) => {
 };
 
 // ======================================
-// 6. GET RANDOM EMPTY CART ILLUSTRATION
+// 6. GET RANDOM EMPTY CART ILLUSTRATION (EXCLUSIVELY FROM UPLOADS FOLDER!)
 // GET /api/v1/cart/empty-illustration
 // ======================================
 const getEmptyCartIllustration = async (req, res) => {
     try {
-        const { gender } = req.query;
+        const folderPath = path.join(__dirname, "../public/uploads/empty_cart");
+        let customUrls = [];
 
-        // 5 High-Quality Random Shopping Illustration Images
-        const femaleIllustrations = [
-            'https://images.unsplash.com/photo-1543163521-1bf539c55dd2',
-            'https://images.unsplash.com/photo-1483985988355-763728e1935b',
-            'https://images.unsplash.com/photo-1490481651871-ab68de25d43d',
-            'https://images.unsplash.com/photo-1445205170230-053b83016050',
-            'https://images.unsplash.com/photo-1472851294608-062f824d29cc'
-        ];
+        if (fs.existsSync(folderPath)) {
+            const files = fs.readdirSync(folderPath);
+            const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
+            if (imageFiles.length > 0) {
+                const host = req.headers.host || "10.187.214.105:5000";
+                const protocol = req.protocol || "http";
+                customUrls = imageFiles.map(file => `${protocol}://${host}/uploads/empty_cart/${file}`);
+            }
+        }
 
-        const maleIllustrations = [
-            'https://images.unsplash.com/photo-1483985988355-763728e1935b',
-            'https://images.unsplash.com/photo-1490578474895-699bc4e2cf59',
-            'https://images.unsplash.com/photo-1507679799987-c73779587ccf',
-            'https://images.unsplash.com/photo-1516826957135-700dedea698c',
-            'https://images.unsplash.com/photo-1441986300917-64674bd600d8'
-        ];
+        if (customUrls.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: "No empty cart illustrations uploaded yet",
+                illustrationUrl: null,
+                totalCount: 0
+            });
+        }
 
-        const list = (gender && gender.toLowerCase() === 'female') ? femaleIllustrations : maleIllustrations;
-
-        // Pick a random illustration from the list on every API call!
-        const randomIndex = Math.floor(Math.random() * list.length);
-        const randomImageUrl = list[randomIndex];
-
+        // Pick a random illustration from public/uploads/empty_cart/
+        const randomIndex = Math.floor(Math.random() * customUrls.length);
         return res.status(200).json({
             success: true,
             message: "Empty cart illustration fetched successfully",
-            illustrationUrl: randomImageUrl,
-            randomIndex: randomIndex
+            illustrationUrl: customUrls[randomIndex],
+            randomIndex: randomIndex,
+            totalCount: customUrls.length
         });
 
     } catch (error) {
