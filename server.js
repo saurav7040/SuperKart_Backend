@@ -15,6 +15,7 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
+const contestRoutes = require("./routes/contestRoutes");
 
 const app = express();
 
@@ -36,6 +37,7 @@ app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/location", locationRoutes);
 app.use("/api/v1/cart", cartRoutes);
 app.use("/api/v1/orders", orderRoutes);
+app.use("/api/v1/contests", contestRoutes);
 
 // Start Server
 const startServer = async () => {
