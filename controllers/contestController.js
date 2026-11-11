@@ -1,7 +1,7 @@
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET MY ACTIVE CONTEST ENTRIES (Supports multiple joined contests & real joined_count!)
+// 1. GET MY ACTIVE CONTEST ENTRIES (Supports multiple joined contests & real database calculated joined_count!)
 // GET /api/v1/contests/my-active
 // ======================================
 const getMyActiveContest = async (req, res) => {
@@ -17,10 +17,11 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
-        // Query ALL active contests joined by user
+        // Query ALL active contests joined by user with REAL calculated database joined count
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
-                   c.joined_count, c.unlocks_at, c.status,
+                   c.unlocks_at, c.status,
+                   (SELECT COUNT(*) FROM user_contest_entries WHERE contest_id = c.id) AS real_joined_count,
                    p.image_url,
                    e.is_scratchable, e.is_scratched, e.is_winner
             FROM user_contest_entries e
@@ -47,7 +48,7 @@ const getMyActiveContest = async (req, res) => {
             shoeSubtitle: row.subtitle,
             imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
             winOfferPrice: parseFloat(row.entry_fee),
-            joinedUsersCount: parseInt(row.joined_count || 1),
+            joinedUsersCount: Math.max(1, parseInt(row.real_joined_count || 1)),
             unlocksAt: row.unlocks_at,
             isScratchable: row.is_scratchable || false,
             isScratched: row.is_scratched || false,
@@ -91,7 +92,7 @@ const joinContest = async (req, res) => {
         const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
         const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
 
-        // Upsert contest campaign for this product (Real joined count starts at 1 and increments on conflict!)
+        // Upsert contest campaign for this product
         await pool.query(
             `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
              VALUES ($1, $2, $3, $4, $5, $6, 1, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
