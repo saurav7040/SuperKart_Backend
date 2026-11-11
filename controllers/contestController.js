@@ -8,26 +8,34 @@ const getMyActiveContest = async (req, res) => {
     try {
         const userId = req.user ? req.user.userId : null;
 
+        if (!userId) {
+            return res.status(200).json({
+                success: true,
+                message: "No active contest for guest user",
+                contest: null
+            });
+        }
+
         // Query active contest joined by user or latest active contest
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.joined_count, c.unlocks_at, c.status,
                    p.image_url,
                    e.is_scratchable, e.is_scratched, e.is_winner
-            FROM contests c
+            FROM user_contest_entries e
+            JOIN contests c ON e.contest_id = c.id
             LEFT JOIN products p ON c.product_id = p.id
-            LEFT JOIN user_contest_entries e ON c.id = e.contest_id AND e.user_id = $1
-            WHERE c.status = 'ACTIVE'
-            ORDER BY c.created_at DESC
+            WHERE e.user_id = $1 AND c.status = 'ACTIVE'
+            ORDER BY e.created_at DESC
             LIMIT 1
         `;
 
-        const result = await pool.query(query, [userId || 0]);
+        const result = await pool.query(query, [userId]);
 
         if (result.rows.length === 0) {
             return res.status(200).json({
                 success: true,
-                message: "No active contests found",
+                message: "No active contests joined yet",
                 contest: null
             });
         }
@@ -72,7 +80,7 @@ const joinContest = async (req, res) => {
         const { contestId, productId, entryFee } = req.body;
 
         const effectiveContestId = contestId || 'cnt_sole_mates_101';
-        const fee = parseFloat(entryFee || 100.0);
+        const fee = Math.round(parseFloat(entryFee || 100.0));
 
         // Record user entry in user_contest_entries
         await pool.query(
@@ -95,7 +103,7 @@ const joinContest = async (req, res) => {
             [
                 userId,
                 "⚡ Flash Contest Slot Joined!",
-                `You have successfully booked your slot for ₹${fee.toInt ? fee.toInt() : fee}. Contest unlocks soon!`,
+                `You have successfully booked your slot for ₹${fee}. Contest unlocks soon!`,
                 "contest",
                 "Just now"
             ]
