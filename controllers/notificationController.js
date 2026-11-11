@@ -116,8 +116,41 @@ const createNotification = async (req, res) => {
     }
 };
 
+// ======================================
+// 4. MARK SINGLE NOTIFICATION AS READ
+// PUT /api/v1/notifications/:id/mark-read
+// ======================================
+const markSingleAsRead = async (req, res) => {
+    try {
+        const notifId = req.params.id;
+        const userId = req.user ? req.user.userId : null;
+
+        if (userId) {
+            await pool.query(
+                "UPDATE notifications SET is_read = TRUE WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+                [notifId, userId]
+            );
+        } else {
+            await pool.query("UPDATE notifications SET is_read = TRUE WHERE id = $1", [notifId]);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Notification marked as read"
+        });
+
+    } catch (error) {
+        console.error("Mark Single Read Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to mark notification as read"
+        });
+    }
+};
+
 module.exports = {
     getNotifications,
     markAllAsRead,
-    createNotification
+    createNotification,
+    markSingleAsRead
 };
