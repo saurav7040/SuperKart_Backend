@@ -3,7 +3,10 @@ const router = express.Router();
 const cartController = require("../controllers/cartController");
 const authMiddleware = require("../middleware/authMiddleware");
 
-// Authentication required for all Cart operations
+// Public API
+router.get("/empty-illustration", cartController.getEmptyCartIllustration);
+
+// Authentication required for user Cart operations
 router.use(authMiddleware);
 
 router.get("/", cartController.getCart);

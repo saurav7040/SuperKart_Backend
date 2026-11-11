@@ -227,10 +227,58 @@ const clearCart = async (req, res) => {
     }
 };
 
+// ======================================
+// 6. GET RANDOM EMPTY CART ILLUSTRATION
+// GET /api/v1/cart/empty-illustration
+// ======================================
+const getEmptyCartIllustration = async (req, res) => {
+    try {
+        const { gender } = req.query;
+
+        // 5 High-Quality Random Shopping Illustration Images
+        const femaleIllustrations = [
+            'https://images.unsplash.com/photo-1543163521-1bf539c55dd2',
+            'https://images.unsplash.com/photo-1483985988355-763728e1935b',
+            'https://images.unsplash.com/photo-1490481651871-ab68de25d43d',
+            'https://images.unsplash.com/photo-1445205170230-053b83016050',
+            'https://images.unsplash.com/photo-1472851294608-062f824d29cc'
+        ];
+
+        const maleIllustrations = [
+            'https://images.unsplash.com/photo-1483985988355-763728e1935b',
+            'https://images.unsplash.com/photo-1490578474895-699bc4e2cf59',
+            'https://images.unsplash.com/photo-1507679799987-c73779587ccf',
+            'https://images.unsplash.com/photo-1516826957135-700dedea698c',
+            'https://images.unsplash.com/photo-1441986300917-64674bd600d8'
+        ];
+
+        const list = (gender && gender.toLowerCase() === 'female') ? femaleIllustrations : maleIllustrations;
+
+        // Pick a random illustration from the list on every API call!
+        const randomIndex = Math.floor(Math.random() * list.length);
+        const randomImageUrl = list[randomIndex];
+
+        return res.status(200).json({
+            success: true,
+            message: "Empty cart illustration fetched successfully",
+            illustrationUrl: randomImageUrl,
+            randomIndex: randomIndex
+        });
+
+    } catch (error) {
+        console.error("Get Empty Cart Illustration Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to fetch empty cart illustration"
+        });
+    }
+};
+
 module.exports = {
     getCart,
     addToCart,
     updateCartQuantity,
     removeFromCart,
-    clearCart
+    clearCart,
+    getEmptyCartIllustration
 };
