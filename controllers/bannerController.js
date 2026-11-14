@@ -38,7 +38,7 @@ const getBanners = async (req, res) => {
             const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
 
             folderBanners = imageFiles.map((file, index) => {
-                const host = req.headers.host || "10.187.214.105:5000";
+                const host = req.headers.host || "172.22.221.105:5000";
                 const protocol = req.protocol || "http";
                 return {
                     id: `folder_banner_${index + 1}`,

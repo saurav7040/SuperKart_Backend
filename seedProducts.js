@@ -2,7 +2,7 @@ const { pool } = require("./config/db");
 
 const seedProducts = async () => {
     try {
-        console.log("Seeding products with multi-image carousels into PostgreSQL database...");
+        console.log("Seeding products & contest drops into PostgreSQL database...");
 
         const products = [
             // 1-COLUMN SHOES CATEGORY
@@ -162,9 +162,29 @@ const seedProducts = async () => {
                     item.available_colors
                 ]
             );
+
+            // Auto-seed active contest drops for all products in contests table!
+            const contestId = `cnt_${item.id}`;
+            const fee = item.win_offer_price;
+            await pool.query(
+                `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
+                 ON CONFLICT (id) DO UPDATE SET
+                    entry_fee = EXCLUDED.entry_fee,
+                    voucher_amount = EXCLUDED.voucher_amount`,
+                [
+                    contestId,
+                    item.id,
+                    item.title.toUpperCase(),
+                    (item.subtitle || 'LIMITED DROP').toUpperCase(),
+                    fee,
+                    fee * 2,
+                    1
+                ]
+            );
         }
 
-        console.log("Products seeded with multi-image carousels successfully! 🎉");
+        console.log("Products & contest drops seeded successfully into PostgreSQL! 🎉");
         process.exit(0);
 
     } catch (error) {

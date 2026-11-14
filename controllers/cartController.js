@@ -242,7 +242,7 @@ const getEmptyCartIllustration = async (req, res) => {
             const files = fs.readdirSync(folderPath);
             const imageFiles = files.filter(f => /\.(jpg|jpeg|png|webp|gif)$/i.test(f));
             if (imageFiles.length > 0) {
-                const host = req.headers.host || "10.187.214.105:5000";
+                const host = req.headers.host || "172.22.221.105:5000";
                 const protocol = req.protocol || "http";
                 customUrls = imageFiles.map(file => `${protocol}://${host}/uploads/empty_cart/${file}`);
             }
