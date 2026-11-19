@@ -7,5 +7,6 @@ const authMiddleware = require("../middleware/authMiddleware");
 router.get("/my-active", authMiddleware, contestController.getMyActiveContest);
 router.post("/join", authMiddleware, contestController.joinContest);
 router.post("/scratch", authMiddleware, contestController.scratchVoucher);
+router.post("/claim-prize", authMiddleware, contestController.claimPrize);
 
 module.exports = router;

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { pool } = require("../config/db");
 
 // ======================================
@@ -147,7 +148,7 @@ const triggerWinnerDrawAlgorithm = async () => {
 };
 
 // ======================================
-// 3. JOIN A FLASH CONTEST (Fixed contestId FK mapping to product contest drop!)
+// 3. JOIN A FLASH CONTEST
 // POST /api/v1/contests/join
 // ======================================
 const joinContest = async (req, res) => {
@@ -157,8 +158,6 @@ const joinContest = async (req, res) => {
 
         const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
-
-        // Maps cleanly to campaign ID in contests table (e.g. cnt_shoe_1 or cnt_phone_1)
         const cId = contestId || `cnt_${pId}`;
 
         // Get product details
@@ -252,8 +251,110 @@ const scratchVoucher = async (req, res) => {
     }
 };
 
+// ======================================
+// 5. CLAIM WINNER GRAND PRIZE & CONFIRM DELIVERY ADDRESS
+// POST /api/v1/contests/claim-prize
+// ======================================
+const claimPrize = async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const userId = req.user.userId;
+        const { contestId, deliveryAddress } = req.body;
+
+        if (!contestId || !deliveryAddress) {
+            return res.status(400).json({
+                success: false,
+                message: "contestId and deliveryAddress are required"
+            });
+        }
+
+        // Verify user is the winner of this contest
+        const entryRes = await client.query(
+            "SELECT * FROM user_contest_entries WHERE contest_id = $1 AND user_id = $2 AND is_winner = TRUE",
+            [contestId, userId]
+        );
+
+        if (entryRes.rows.length === 0) {
+            return res.status(403).json({
+                success: false,
+                message: "User is not the winner of this contest"
+            });
+        }
+
+        await client.query("BEGIN");
+
+        // Get contest product details
+        const contestRes = await client.query("SELECT * FROM contests WHERE id = $1", [contestId]);
+        const contest = contestRes.rows[0];
+        const productId = contest ? contest.product_id : 'shoe_1';
+
+        // Upsert contest_winners record
+        await client.query(
+            `INSERT INTO contest_winners (contest_id, user_id, product_id, claim_status, delivery_address)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (contest_id, user_id)
+             DO UPDATE SET claim_status = 'ADDRESS_CONFIRMED', delivery_address = EXCLUDED.delivery_address`,
+            [contestId, userId, productId, 'ADDRESS_CONFIRMED', JSON.stringify(deliveryAddress)]
+        );
+
+        // Generate clean Order ID e.g. SK-WIN-849201 for Admin Dispatch
+        const orderId = "SK-WIN-" + crypto.randomInt(100000, 999999).toString();
+
+        // Create FREE Winner Order Record in orders table
+        await client.query(
+            `INSERT INTO orders (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+                orderId,
+                userId,
+                JSON.stringify([{ productId: productId, quantity: 1, isGrandPrize: true }]),
+                JSON.stringify(deliveryAddress),
+                'GRAND_PRIZE_FREE',
+                0.00,
+                0.00,
+                'CONFIRMED'
+            ]
+        );
+
+        // Dispatch Prize Confirmation Notification
+        await client.query(
+            `INSERT INTO notifications (user_id, title, body, type, time_ago)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+                userId,
+                "📦 Prize Dispatch In Progress!",
+                `Your free 1st Place Winner Order #${orderId} has been confirmed for delivery. Admin is processing dispatch!`,
+                "order",
+                "Just now"
+            ]
+        );
+
+        await client.query("COMMIT");
+
+        return res.status(200).json({
+            success: true,
+            message: "Prize claimed successfully! Your product order has been dispatched for delivery.",
+            orderId: orderId,
+            claimStatus: "ADDRESS_CONFIRMED",
+            estimatedDelivery: "Delivered by Wednesday, 04th Nov"
+        });
+
+    } catch (error) {
+        await client.query("ROLLBACK");
+        console.error("Claim Prize Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to claim prize"
+        });
+    } finally {
+        client.release();
+    }
+};
+
 module.exports = {
     getMyActiveContest,
     joinContest,
-    scratchVoucher
+    scratchVoucher,
+    claimPrize
 };
