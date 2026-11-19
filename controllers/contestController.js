@@ -18,13 +18,13 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
-        // Auto-Trigger Winner Selection Algorithm for any expired active contests!
+        // Auto-Trigger Winner Selection Algorithm for any expired entry windows!
         await triggerWinnerDrawAlgorithm();
 
         // Query ALL unscratched contest passes joined by user
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
-                   c.unlocks_at, c.status,
+                   c.unlocks_at, c.entry_start_time, c.entry_end_time, c.status,
                    (SELECT COUNT(*) FROM user_contest_entries WHERE contest_id = c.id) AS real_joined_count,
                    p.image_url,
                    e.is_scratchable, e.is_scratched, e.is_winner, e.voucher_code
@@ -62,7 +62,7 @@ const getMyActiveContest = async (req, res) => {
                 isScratched: row.is_scratched || false,
                 isWinner: row.is_winner || false,
                 voucherAmount: parseFloat(row.voucher_amount || 200.0),
-                voucherCode: row.voucher_code || 'SUPER200'
+                voucherCode: row.voucher_code || null // NULL during registration phase!
             };
         });
 
@@ -84,12 +84,13 @@ const getMyActiveContest = async (req, res) => {
 
 // ======================================
 // 2. RANDOM WINNER SELECTION ALGORITHM ENGINE
+// Executed when entry window ends (entry_end_time <= NOW() or unlocks_at <= NOW())
 // ======================================
 const triggerWinnerDrawAlgorithm = async () => {
     try {
-        // Find contests whose unlocks_at has passed but are still marked ACTIVE
+        // Find contests whose entry_end_time or unlocks_at has passed but are still marked ACTIVE / LIVE
         const expiredContests = await pool.query(
-            "SELECT id FROM contests WHERE unlocks_at <= NOW() AND status = 'ACTIVE'"
+            "SELECT id FROM contests WHERE (entry_end_time <= NOW() OR unlocks_at <= NOW()) AND (status = 'ACTIVE' OR status = 'LIVE_REGISTRATION')"
         );
 
         for (const contest of expiredContests.rows) {
@@ -106,7 +107,7 @@ const triggerWinnerDrawAlgorithm = async () => {
             if (winnerQuery.rows.length > 0) {
                 const winnerEntry = winnerQuery.rows[0];
 
-                // 1. Mark winner entry
+                // 1. Mark winner entry (Assigns WINNER_GRAND_PRIZE voucher code!)
                 await pool.query(
                     `UPDATE user_contest_entries
                      SET is_winner = TRUE, is_scratchable = TRUE, voucher_code = 'WINNER_GRAND_PRIZE'
@@ -114,7 +115,7 @@ const triggerWinnerDrawAlgorithm = async () => {
                     [winnerEntry.id]
                 );
 
-                // 2. Mark all other entries as scratchable for 2x voucher refund!
+                // 2. Mark all other entries as non-winners for 2x refund voucher (Assigns SUPER200 code!)
                 await pool.query(
                     `UPDATE user_contest_entries
                      SET is_winner = FALSE, is_scratchable = TRUE, voucher_code = 'SUPER200'
@@ -148,7 +149,7 @@ const triggerWinnerDrawAlgorithm = async () => {
 };
 
 // ======================================
-// 3. JOIN A FLASH CONTEST (Supports re-joining and future unlock times!)
+// 3. JOIN A FLASH CONTEST (Registration Phase: voucher_code is NULL!)
 // POST /api/v1/contests/join
 // ======================================
 const joinContest = async (req, res) => {
@@ -169,21 +170,20 @@ const joinContest = async (req, res) => {
 
         // Upsert contest campaign for this product in contests table
         await pool.query(
-            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 1, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
-             ON CONFLICT (id) DO UPDATE SET
-                joined_count = contests.joined_count + 1,
-                status = CASE WHEN contests.unlocks_at > NOW() THEN 'ACTIVE' ELSE contests.status END`,
+            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), NOW() + INTERVAL '24 hours', NOW() + INTERVAL '48 hours', 'LIVE_REGISTRATION')
+             ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
             [cId, pId, title, subtitle, fee, fee * 2]
         );
 
-        // Record user entry in user_contest_entries table (Upsert & reset is_scratched = FALSE so pass renders!)
+        // Record user entry in user_contest_entries table WITH voucher_code = NULL during registration phase!
         await pool.query(
-            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratched, is_winner)
-             VALUES ($1, $2, $3, $4, FALSE, FALSE)
+            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratchable, is_scratched, is_winner, voucher_code)
+             VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, NULL)
              ON CONFLICT (user_id, contest_id) DO UPDATE SET
                 is_scratched = FALSE,
                 is_winner = FALSE,
+                voucher_code = NULL,
                 created_at = NOW()`,
             [userId, cId, fee, fee * 2]
         );
