@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET MY ACTIVE CONTEST ENTRIES
+// 1. GET MY ACTIVE UN-SCRATCHED CONTEST ENTRIES
 // GET /api/v1/contests/my-active
 // ======================================
 const getMyActiveContest = async (req, res) => {
@@ -21,7 +21,7 @@ const getMyActiveContest = async (req, res) => {
         // Auto-Trigger Winner Selection Algorithm for any expired active contests!
         await triggerWinnerDrawAlgorithm();
 
-        // Query ALL active contests joined by user with REAL calculated database joined count
+        // Query ALL active contests joined by user that are NOT scratched yet!
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.unlocks_at, c.status,
@@ -31,7 +31,7 @@ const getMyActiveContest = async (req, res) => {
             FROM user_contest_entries e
             JOIN contests c ON e.contest_id = c.id
             LEFT JOIN products p ON c.product_id = p.id
-            WHERE e.user_id = $1 AND (c.status = 'ACTIVE' OR c.status = 'LOCKED_SCRATCHABLE')
+            WHERE e.user_id = $1 AND (c.status = 'ACTIVE' OR c.status = 'LOCKED_SCRATCHABLE') AND e.is_scratched = FALSE
             ORDER BY e.created_at DESC
         `;
 
@@ -212,7 +212,7 @@ const joinContest = async (req, res) => {
 };
 
 // ======================================
-// 4. SCRATCH & CLAIM REWARD VOUCHER
+// 4. SCRATCH & CLAIM REWARD VOUCHER (One-time scratch restriction & moves to history!)
 // POST /api/v1/contests/scratch
 // ======================================
 const scratchVoucher = async (req, res) => {
@@ -352,9 +352,65 @@ const claimPrize = async (req, res) => {
     }
 };
 
+// ======================================
+// 6. GET COMPLETED CONTEST HISTORY FOR USER
+// GET /api/v1/contests/history
+// ======================================
+const getContestHistory = async (req, res) => {
+    try {
+        const userId = req.user ? req.user.userId : null;
+
+        if (!userId) {
+            return res.status(200).json({
+                success: true,
+                message: "No contest history for guest user",
+                history: []
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
+                    p.image_url,
+                    e.is_winner, e.voucher_code, e.created_at
+             FROM user_contest_entries e
+             JOIN contests c ON e.contest_id = c.id
+             LEFT JOIN products p ON c.product_id = p.id
+             WHERE e.user_id = $1 AND e.is_scratched = TRUE
+             ORDER BY e.created_at DESC`,
+            [userId]
+        );
+
+        const formattedHistory = result.rows.map(row => ({
+            id: String(row.id),
+            shoeTitle: row.title,
+            shoeSubtitle: row.subtitle,
+            imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+            winOfferPrice: parseFloat(row.entry_fee),
+            voucherAmount: parseFloat(row.voucher_amount || 200.0),
+            voucherCode: row.voucher_code || 'SUPER200',
+            isWinner: row.is_winner || false,
+            completedAt: 'Just now'
+        }));
+
+        return res.status(200).json({
+            success: true,
+            message: "Contest history fetched successfully",
+            history: formattedHistory
+        });
+
+    } catch (error) {
+        console.error("Get Contest History Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to fetch contest history"
+        });
+    }
+};
+
 module.exports = {
     getMyActiveContest,
     joinContest,
     scratchVoucher,
-    claimPrize
+    claimPrize,
+    getContestHistory
 };
