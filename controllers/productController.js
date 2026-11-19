@@ -1,18 +1,33 @@
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET ALL PRODUCTS (Filtered by Category)
+// 1. GET ALL LIVE CONTEST PRODUCTS (Filtered by active entry window)
 // GET /api/v1/products?category=shoes|smartphones|all
 // ======================================
 const getProducts = async (req, res) => {
     try {
         const { category } = req.query;
 
-        let query = "SELECT * FROM products ORDER BY id ASC";
+        // SQL Query: Only fetch products whose contest entry window is currently LIVE in the present time!
+        let query = `
+            SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
+            FROM products p
+            JOIN contests c ON p.id = c.product_id
+            WHERE c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()
+            ORDER BY p.id ASC
+        `;
+
         let params = [];
 
         if (category && category !== "all") {
-            query = "SELECT * FROM products WHERE category = $1 ORDER BY id ASC";
+            query = `
+                SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
+                FROM products p
+                JOIN contests c ON p.id = c.product_id
+                WHERE p.category = $1
+                  AND c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()
+                ORDER BY p.id ASC
+            `;
             params = [category];
         }
 
@@ -65,7 +80,7 @@ const getProducts = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Products fetched successfully",
+            message: "Live contest products fetched successfully",
             products: formattedProducts
         });
 
