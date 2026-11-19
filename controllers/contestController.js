@@ -21,7 +21,7 @@ const getMyActiveContest = async (req, res) => {
         // Auto-Trigger Winner Selection Algorithm for any expired active contests!
         await triggerWinnerDrawAlgorithm();
 
-        // Query ALL active contests joined by user that are NOT scratched yet!
+        // Query ALL unscratched contest passes joined by user
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.unlocks_at, c.status,
@@ -31,7 +31,7 @@ const getMyActiveContest = async (req, res) => {
             FROM user_contest_entries e
             JOIN contests c ON e.contest_id = c.id
             LEFT JOIN products p ON c.product_id = p.id
-            WHERE e.user_id = $1 AND (c.status = 'ACTIVE' OR c.status = 'LOCKED_SCRATCHABLE') AND e.is_scratched = FALSE
+            WHERE e.user_id = $1 AND e.is_scratched = FALSE
             ORDER BY e.created_at DESC
         `;
 
@@ -98,7 +98,7 @@ const triggerWinnerDrawAlgorithm = async () => {
             // Pick 1 random lucky winner from user_contest_entries using PostgreSQL RANDOM()
             const winnerQuery = await pool.query(
                 `SELECT id, user_id FROM user_contest_entries
-                 WHERE contest_id = $1
+                 WHERE contest_id = $1 AND is_scratched = FALSE
                  ORDER BY RANDOM() LIMIT 1`,
                 [contestId]
             );
@@ -148,7 +148,7 @@ const triggerWinnerDrawAlgorithm = async () => {
 };
 
 // ======================================
-// 3. JOIN A FLASH CONTEST
+// 3. JOIN A FLASH CONTEST (Supports re-joining and future unlock times!)
 // POST /api/v1/contests/join
 // ======================================
 const joinContest = async (req, res) => {
@@ -171,15 +171,20 @@ const joinContest = async (req, res) => {
         await pool.query(
             `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
              VALUES ($1, $2, $3, $4, $5, $6, 1, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
-             ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
+             ON CONFLICT (id) DO UPDATE SET
+                joined_count = contests.joined_count + 1,
+                status = CASE WHEN contests.unlocks_at > NOW() THEN 'ACTIVE' ELSE contests.status END`,
             [cId, pId, title, subtitle, fee, fee * 2]
         );
 
-        // Record user entry in user_contest_entries table
+        // Record user entry in user_contest_entries table (Upsert & reset is_scratched = FALSE so pass renders!)
         await pool.query(
-            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (user_id, contest_id) DO NOTHING`,
+            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratched, is_winner)
+             VALUES ($1, $2, $3, $4, FALSE, FALSE)
+             ON CONFLICT (user_id, contest_id) DO UPDATE SET
+                is_scratched = FALSE,
+                is_winner = FALSE,
+                created_at = NOW()`,
             [userId, cId, fee, fee * 2]
         );
 
@@ -212,7 +217,7 @@ const joinContest = async (req, res) => {
 };
 
 // ======================================
-// 4. SCRATCH & CLAIM REWARD VOUCHER (One-time scratch restriction & moves to history!)
+// 4. SCRATCH & CLAIM REWARD VOUCHER
 // POST /api/v1/contests/scratch
 // ======================================
 const scratchVoucher = async (req, res) => {
