@@ -1,7 +1,7 @@
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET MY ACTIVE CONTEST ENTRIES (Supports multiple joined contests & real database calculated joined_count!)
+// 1. GET MY ACTIVE CONTEST ENTRIES
 // GET /api/v1/contests/my-active
 // ======================================
 const getMyActiveContest = async (req, res) => {
@@ -17,17 +17,20 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
+        // Auto-Trigger Winner Selection Algorithm for any expired active contests!
+        await triggerWinnerDrawAlgorithm();
+
         // Query ALL active contests joined by user with REAL calculated database joined count
         let query = `
             SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
                    c.unlocks_at, c.status,
                    (SELECT COUNT(*) FROM user_contest_entries WHERE contest_id = c.id) AS real_joined_count,
                    p.image_url,
-                   e.is_scratchable, e.is_scratched, e.is_winner
+                   e.is_scratchable, e.is_scratched, e.is_winner, e.voucher_code
             FROM user_contest_entries e
             JOIN contests c ON e.contest_id = c.id
             LEFT JOIN products p ON c.product_id = p.id
-            WHERE e.user_id = $1 AND c.status = 'ACTIVE'
+            WHERE e.user_id = $1 AND (c.status = 'ACTIVE' OR c.status = 'LOCKED_SCRATCHABLE')
             ORDER BY e.created_at DESC
         `;
 
@@ -42,19 +45,25 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
-        const formattedContests = result.rows.map(row => ({
-            id: row.id,
-            shoeTitle: row.title,
-            shoeSubtitle: row.subtitle,
-            imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
-            winOfferPrice: parseFloat(row.entry_fee),
-            joinedUsersCount: Math.max(1, parseInt(row.real_joined_count || 1)),
-            unlocksAt: row.unlocks_at,
-            isScratchable: row.is_scratchable || false,
-            isScratched: row.is_scratched || false,
-            isWinner: row.is_winner || false,
-            voucherAmount: parseFloat(row.voucher_amount || 200.0)
-        }));
+        const formattedContests = result.rows.map(row => {
+            const unlocksAtDate = new Date(row.unlocks_at);
+            const isUnlocked = unlocksAtDate <= new Date() || row.is_scratchable;
+
+            return {
+                id: row.id,
+                shoeTitle: row.title,
+                shoeSubtitle: row.subtitle,
+                imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                winOfferPrice: parseFloat(row.entry_fee),
+                joinedUsersCount: Math.max(1, parseInt(row.real_joined_count || 1)),
+                unlocksAt: row.unlocks_at,
+                isScratchable: isUnlocked,
+                isScratched: row.is_scratched || false,
+                isWinner: row.is_winner || false,
+                voucherAmount: parseFloat(row.voucher_amount || 200.0),
+                voucherCode: row.voucher_code || 'SUPER200'
+            };
+        });
 
         return res.status(200).json({
             success: true,
@@ -73,7 +82,72 @@ const getMyActiveContest = async (req, res) => {
 };
 
 // ======================================
-// 2. JOIN A FLASH CONTEST
+// 2. RANDOM WINNER SELECTION ALGORITHM ENGINE
+// ======================================
+const triggerWinnerDrawAlgorithm = async () => {
+    try {
+        // Find contests whose unlocks_at has passed but are still marked ACTIVE
+        const expiredContests = await pool.query(
+            "SELECT id FROM contests WHERE unlocks_at <= NOW() AND status = 'ACTIVE'"
+        );
+
+        for (const contest of expiredContests.rows) {
+            const contestId = contest.id;
+
+            // Pick 1 random lucky winner from user_contest_entries using PostgreSQL RANDOM()
+            const winnerQuery = await pool.query(
+                `SELECT id, user_id FROM user_contest_entries
+                 WHERE contest_id = $1
+                 ORDER BY RANDOM() LIMIT 1`,
+                [contestId]
+            );
+
+            if (winnerQuery.rows.length > 0) {
+                const winnerEntry = winnerQuery.rows[0];
+
+                // 1. Mark winner entry
+                await pool.query(
+                    `UPDATE user_contest_entries
+                     SET is_winner = TRUE, is_scratchable = TRUE, voucher_code = 'WINNER_GRAND_PRIZE'
+                     WHERE id = $1`,
+                    [winnerEntry.id]
+                );
+
+                // 2. Mark all other entries as scratchable for 2x voucher refund!
+                await pool.query(
+                    `UPDATE user_contest_entries
+                     SET is_winner = FALSE, is_scratchable = TRUE, voucher_code = 'SUPER200'
+                     WHERE contest_id = $1 AND id != $2`,
+                    [contestId, winnerEntry.id]
+                );
+
+                // 3. Update contest status to LOCKED_SCRATCHABLE
+                await pool.query(
+                    "UPDATE contests SET status = 'LOCKED_SCRATCHABLE' WHERE id = $1",
+                    [contestId]
+                );
+
+                // 4. Dispatch Winner Notification
+                await pool.query(
+                    `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                     VALUES ($1, $2, $3, $4, $5)`,
+                    [
+                        winnerEntry.user_id,
+                        "🏆 CONGRATULATIONS! YOU WON THE CONTEST!",
+                        `You have been selected as the 1st Place Winner for Contest #${contestId}! Claim your prize now.`,
+                        "contest",
+                        "Just now"
+                    ]
+                );
+            }
+        }
+    } catch (error) {
+        console.error("Winner Selection Algorithm Error:", error.message);
+    }
+};
+
+// ======================================
+// 3. JOIN A FLASH CONTEST (Fixed contestId FK mapping to product contest drop!)
 // POST /api/v1/contests/join
 // ======================================
 const joinContest = async (req, res) => {
@@ -83,7 +157,9 @@ const joinContest = async (req, res) => {
 
         const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
-        const cId = contestId || `cnt_${pId}_${userId}`;
+
+        // Maps cleanly to campaign ID in contests table (e.g. cnt_shoe_1 or cnt_phone_1)
+        const cId = contestId || `cnt_${pId}`;
 
         // Get product details
         const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [pId]);
@@ -92,7 +168,7 @@ const joinContest = async (req, res) => {
         const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
         const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
 
-        // Upsert contest campaign for this product
+        // Upsert contest campaign for this product in contests table
         await pool.query(
             `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, unlocks_at, status)
              VALUES ($1, $2, $3, $4, $5, $6, 1, NOW() + INTERVAL '2 hours 14 minutes', 'ACTIVE')
@@ -100,7 +176,7 @@ const joinContest = async (req, res) => {
             [cId, pId, title, subtitle, fee, fee * 2]
         );
 
-        // Record user entry in user_contest_entries
+        // Record user entry in user_contest_entries table
         await pool.query(
             `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount)
              VALUES ($1, $2, $3, $4)
@@ -137,7 +213,7 @@ const joinContest = async (req, res) => {
 };
 
 // ======================================
-// 3. SCRATCH & CLAIM REWARD VOUCHER
+// 4. SCRATCH & CLAIM REWARD VOUCHER
 // POST /api/v1/contests/scratch
 // ======================================
 const scratchVoucher = async (req, res) => {
@@ -145,19 +221,26 @@ const scratchVoucher = async (req, res) => {
         const userId = req.user.userId;
         const { contestId } = req.body;
 
-        const effectiveContestId = contestId || 'cnt_sole_mates_101';
+        const effectiveContestId = contestId || 'cnt_shoe_1';
 
-        await pool.query(
+        const result = await pool.query(
             `UPDATE user_contest_entries
              SET is_scratched = TRUE
-             WHERE user_id = $1 AND contest_id = $2`,
+             WHERE user_id = $1 AND contest_id = $2
+             RETURNING *`,
             [userId, effectiveContestId]
         );
 
+        const entry = result.rows[0];
+        const isWinner = entry ? entry.is_winner : false;
+        const voucherCode = entry ? (entry.voucher_code || 'SUPER200') : 'SUPER200';
+
         return res.status(200).json({
             success: true,
-            message: "Voucher scratched & claimed successfully!",
-            voucherAmount: 200.0
+            message: isWinner ? "Grand prize claimed!" : "2X Voucher claimed successfully!",
+            isWinner: isWinner,
+            voucherAmount: entry ? parseFloat(entry.voucher_claimed_amount) : 200.0,
+            voucherCode: voucherCode
         });
 
     } catch (error) {
