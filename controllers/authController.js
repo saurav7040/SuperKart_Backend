@@ -119,7 +119,8 @@ const register = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -216,7 +217,8 @@ const login = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -278,7 +280,8 @@ const getMe = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone,
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 

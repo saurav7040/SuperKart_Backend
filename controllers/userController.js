@@ -1,6 +1,28 @@
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 const { pool } = require("../config/db");
+
+// Multer storage engine for profile pictures
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = path.join(__dirname, "../public/uploads");
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const userId = req.user ? req.user.userId : 'user';
+        const ext = path.extname(file.originalname) || '.jpg';
+        const filename = `profile_${userId}_${Date.now()}${ext}`;
+        cb(null, filename);
+    }
+});
+
+const upload = multer({ storage: storage });
 
 // ======================================
 // 1. GET USER PROFILE
@@ -36,7 +58,8 @@ const getProfile = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || '',
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -55,7 +78,6 @@ const getProfile = async (req, res) => {
         });
     }
 };
-
 
 // ======================================
 // 2. UPDATE USER PROFILE
@@ -137,7 +159,8 @@ const updateProfile = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || emailOrPhone,
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -152,193 +175,191 @@ const updateProfile = async (req, res) => {
 
         return res.status(500).json({
             success: false,
-            message: "Unable to update profile"
+            message: "Failed to update profile"
         });
     }
 };
 
-
 // ======================================
-// 3. REQUEST PASSWORD CHANGE OTP
-// POST /api/v1/users/change-password/request-otp
+// 3. UPLOAD PROFILE PICTURE FILE
+// POST /api/v1/users/upload-profile-pic
 // ======================================
-
-const requestPasswordOtp = async (req, res) => {
+const uploadProfilePic = async (req, res) => {
     try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: "No image file provided" });
+        }
+
         const userId = req.user.userId;
+        const host = req.get('host') || '10.206.145.105:5000';
+        const protocol = req.protocol || 'http';
+        const publicUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
 
-        // Generate a secure 4-digit OTP
-        const otp = crypto.randomInt(1000, 9999).toString();
-
-        // Invalidate previous unused OTPs
-        await pool.query("DELETE FROM user_otps WHERE email_or_phone = (SELECT email FROM users WHERE id = $1)", [userId]);
-
-        // Save OTP with 5-minute expiry
         await pool.query(
-            "INSERT INTO user_otps (email_or_phone, otp_code, expires_at) VALUES ((SELECT email FROM users WHERE id = $1), $2, NOW() + INTERVAL '5 minutes')",
-            [userId, otp]
+            "UPDATE users SET profile_pic_url = $1 WHERE id = $2",
+            [publicUrl, userId]
         );
-
-        console.log(`🔑 [CHANGE PASSWORD OTP] Generated OTP for user ${userId}: ${otp}`);
 
         return res.status(200).json({
             success: true,
-            message: "OTP generated. Check your registered contact.",
+            message: "Profile picture uploaded successfully",
+            profilePicUrl: publicUrl
+        });
+
+    } catch (error) {
+        console.error("Upload Profile Pic Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to upload profile picture" });
+    }
+};
+
+// ======================================
+// 4. REQUEST PASSWORD RESET OTP
+// POST /api/v1/users/change-password/request-otp
+// ======================================
+const requestPasswordOtp = async (req, res) => {
+    try {
+        const { emailOrPhone } = req.body;
+        const identifier = emailOrPhone ? emailOrPhone.trim() : null;
+
+        if (!identifier) {
+            return res.status(400).json({
+                success: false,
+                message: "Email or phone number is required"
+            });
+        }
+
+        const userRes = await pool.query(
+            "SELECT id FROM users WHERE email = $1 OR phone = $1",
+            [identifier]
+        );
+
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "User not registered"
+            });
+        }
+
+        const otp = crypto.randomInt(1000, 9999).toString();
+
+        await pool.query(
+            `INSERT INTO user_otps (email_or_phone, otp_code, expires_at)
+             VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+             ON CONFLICT (email_or_phone)
+             DO UPDATE SET otp_code = EXCLUDED.otp_code, expires_at = EXCLUDED.expires_at`,
+            [identifier, otp]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `OTP sent successfully to ${identifier}`,
             otp: otp
         });
 
     } catch (error) {
-        console.error("OTP Request Error:", error.message);
-
+        console.error("Request Password OTP Error:", error.message);
         return res.status(500).json({
             success: false,
-            message: "Unable to generate OTP"
+            message: "Failed to send OTP"
         });
     }
 };
 
-
 // ======================================
-// 4. CHANGE PASSWORD
+// 5. CHANGE PASSWORD WITH OTP VERIFICATION
 // PUT /api/v1/users/change-password
 // ======================================
-
 const changePassword = async (req, res) => {
     try {
-        const { otp, newPassword, currentPassword } = req.body;
-        const userId = req.user.userId;
+        const { emailOrPhone, otp, newPassword } = req.body;
 
-        if (!otp || !newPassword) {
+        if (!emailOrPhone || !otp || !newPassword) {
             return res.status(400).json({
                 success: false,
-                message: "OTP and new password are required"
+                message: "Email/phone, OTP, and new password are required"
             });
         }
 
-        if (newPassword.length < 8) {
-            return res.status(400).json({
-                success: false,
-                message: "New password must contain at least 8 characters"
-            });
-        }
-
-        // Lock user row during password update
-        const userResult = await pool.query(
-            "SELECT password_hash FROM users WHERE id = $1",
-            [userId]
+        const otpRes = await pool.query(
+            "SELECT * FROM user_otps WHERE email_or_phone = $1 AND otp_code = $2 AND expires_at > NOW()",
+            [emailOrPhone.trim(), otp.trim()]
         );
 
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
-        // Check whether new password is same as old password
-        const samePassword = await bcrypt.compare(
-            newPassword,
-            userResult.rows[0].password_hash
-        );
-
-        if (samePassword) {
+        if (otpRes.rows.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "New password cannot be the same as current password!"
+                message: "Invalid or expired OTP"
             });
         }
 
-        // Hash new password
-        const newPasswordHash = await bcrypt.hash(newPassword, 12);
+        const passwordHash = await bcrypt.hash(newPassword, 12);
 
-        // Update password
         await pool.query(
-            "UPDATE users SET password_hash = $1 WHERE id = $2",
-            [newPasswordHash, userId]
+            "UPDATE users SET password_hash = $1 WHERE email = $2 OR phone = $2",
+            [passwordHash, emailOrPhone.trim()]
         );
+
+        await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [emailOrPhone.trim()]);
 
         return res.status(200).json({
             success: true,
-            message: "Password changed successfully."
+            message: "Password updated successfully!"
         });
 
     } catch (error) {
         console.error("Change Password Error:", error.message);
-
         return res.status(500).json({
             success: false,
-            message: "Unable to change password"
+            message: "Failed to change password"
         });
     }
 };
 
 // ======================================
-// 5. UPDATE MOBILE/EMAIL REQUEST OTP
+// 6. REQUEST CONTACT CHANGE OTP
 // POST /api/v1/users/update-contact/send-otp
 // ======================================
-
 const updateContactSendOtp = async (req, res) => {
     try {
         const { newEmailOrPhone } = req.body;
-        const userId = req.user.userId;
+        const identifier = newEmailOrPhone ? newEmailOrPhone.trim() : null;
 
-        if (!newEmailOrPhone || !newEmailOrPhone.trim()) {
+        if (!identifier) {
             return res.status(400).json({
                 success: false,
-                message: "New mobile number or email is required"
+                message: "New email or phone number is required"
             });
         }
 
-        const identifier = newEmailOrPhone.trim();
+        const otp = crypto.randomInt(1000, 9999).toString();
 
-        // Check if another user is already registered with this mobile/email
-        const existingCheck = await pool.query(
-            "SELECT id FROM users WHERE (email = $1 OR phone = $2) AND id != $3",
-            [identifier.toLowerCase(), identifier, userId]
-        );
-
-        if (existingCheck.rows.length > 0) {
-            return res.status(409).json({
-                success: false,
-                message: "Mobile number or email is already registered to another account!"
-            });
-        }
-
-        // Generate 4-digit OTP
-        const otpCode = crypto.randomInt(1000, 9999).toString();
-
-        // Delete unverified OTPs
-        await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [identifier]);
-
-        // Save OTP in pgAdmin with 5-minute expiry
         await pool.query(
-            "INSERT INTO user_otps (email_or_phone, otp_code, expires_at) VALUES ($1, $2, NOW() + INTERVAL '5 minutes')",
-            [identifier, otpCode]
+            `INSERT INTO user_otps (email_or_phone, otp_code, expires_at)
+             VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+             ON CONFLICT (email_or_phone)
+             DO UPDATE SET otp_code = EXCLUDED.otp_code, expires_at = EXCLUDED.expires_at`,
+            [identifier, otp]
         );
-
-        console.log(`📲 [UPDATE CONTACT OTP] Sent OTP: ${otpCode} to ${identifier}`);
 
         return res.status(200).json({
             success: true,
-            message: `OTP sent to ${identifier}`,
-            otp: otpCode,
-            newEmailOrPhone: identifier
+            message: `OTP sent successfully to ${identifier}`,
+            otp: otp
         });
 
     } catch (error) {
         console.error("Update Contact Send OTP Error:", error.message);
         return res.status(500).json({
             success: false,
-            message: "Failed to send update contact OTP"
+            message: "Failed to send OTP"
         });
     }
 };
 
 // ======================================
-// 6. UPDATE MOBILE/EMAIL CONFIRM VERIFICATION
+// 7. CONFIRM CONTACT CHANGE WITH OTP
 // POST /api/v1/users/update-contact/confirm
 // ======================================
-
 const updateContactConfirm = async (req, res) => {
     try {
         const { newEmailOrPhone, otp } = req.body;
@@ -347,34 +368,31 @@ const updateContactConfirm = async (req, res) => {
         if (!newEmailOrPhone || !otp) {
             return res.status(400).json({
                 success: false,
-                message: "New contact and OTP code are required"
+                message: "New contact and OTP are required"
             });
         }
 
         const identifier = newEmailOrPhone.trim();
-        const enteredOtp = otp.trim();
 
-        // Verify OTP
-        const otpResult = await pool.query(
+        const otpRes = await pool.query(
             "SELECT * FROM user_otps WHERE email_or_phone = $1 AND otp_code = $2 AND expires_at > NOW()",
-            [identifier, enteredOtp]
+            [identifier, otp.trim()]
         );
 
-        if (otpResult.rows.length === 0) {
+        if (otpRes.rows.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid or expired OTP code!"
+                message: "Invalid or expired OTP"
             });
         }
 
         const isEmail = identifier.includes("@");
-
-        // Update email or phone in PostgreSQL
         let updateResult;
+
         if (isEmail) {
             updateResult = await pool.query(
                 "UPDATE users SET email = $1, updated_at = NOW() WHERE id = $2 RETURNING *",
-                [identifier.toLowerCase(), userId]
+                [identifier, userId]
             );
         } else {
             updateResult = await pool.query(
@@ -383,7 +401,6 @@ const updateContactConfirm = async (req, res) => {
             );
         }
 
-        // Clean up OTP
         await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [identifier]);
 
         const user = updateResult.rows[0];
@@ -401,7 +418,8 @@ const updateContactConfirm = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
-            coinsBalance: user.coins_balance ?? 0,
+            coins: parseInt(user.coins || user.coins_balance || 0),
+            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -423,6 +441,8 @@ const updateContactConfirm = async (req, res) => {
 module.exports = {
     getProfile,
     updateProfile,
+    uploadProfilePic,
+    upload,
     requestPasswordOtp,
     changePassword,
     updateContactSendOtp,

@@ -18,15 +18,15 @@ const getMyActiveContest = async (req, res) => {
             });
         }
 
-        // Auto-Trigger Winner Selection Algorithm for any expired entry windows!
+        // Auto-Trigger Multi-Winner Selection Algorithm for any expired entry windows!
         await triggerWinnerDrawAlgorithm();
 
         // Query ALL unscratched contest passes joined by user
         let query = `
-            SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
+            SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount, c.max_winners,
                    c.unlocks_at, c.entry_start_time, c.entry_end_time, c.status,
                    (SELECT COUNT(*) FROM user_contest_entries WHERE contest_id = c.id) AS real_joined_count,
-                   p.image_url,
+                   p.image_url, p.regular_price,
                    e.is_scratchable, e.is_scratched, e.is_winner, e.voucher_code
             FROM user_contest_entries e
             JOIN contests c ON e.contest_id = c.id
@@ -49,20 +49,24 @@ const getMyActiveContest = async (req, res) => {
         const formattedContests = result.rows.map(row => {
             const unlocksAtDate = new Date(row.unlocks_at);
             const isUnlocked = unlocksAtDate <= new Date() || row.is_scratchable;
+            const entryFeePaid = parseFloat(row.entry_fee);
+            const adminReturnAmount = parseFloat(row.voucher_amount || entryFeePaid);
 
             return {
                 id: row.id,
                 shoeTitle: row.title,
                 shoeSubtitle: row.subtitle,
                 imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
-                winOfferPrice: parseFloat(row.entry_fee),
+                winOfferPrice: entryFeePaid,
+                regularPrice: parseFloat(row.regular_price || 3599.0),
                 joinedUsersCount: Math.max(1, parseInt(row.real_joined_count || 1)),
+                maxWinnersCount: Math.max(1, parseInt(row.max_winners || 1)),
                 unlocksAt: row.unlocks_at,
                 isScratchable: isUnlocked,
                 isScratched: row.is_scratched || false,
                 isWinner: row.is_winner || false,
-                voucherAmount: parseFloat(row.voucher_amount || 200.0),
-                voucherCode: row.voucher_code || null // NULL during registration phase!
+                voucherAmount: adminReturnAmount,
+                voucherCode: row.voucher_code || null
             };
         });
 
@@ -83,100 +87,173 @@ const getMyActiveContest = async (req, res) => {
 };
 
 // ======================================
-// 2. RANDOM WINNER SELECTION ALGORITHM ENGINE
-// Executed when entry window ends (entry_end_time <= NOW() or unlocks_at <= NOW())
+// 2. RANDOM MULTI-WINNER SELECTION ALGORITHM ENGINE
 // ======================================
 const triggerWinnerDrawAlgorithm = async () => {
     try {
-        // Find contests whose entry_end_time or unlocks_at has passed but are still marked ACTIVE / LIVE
         const expiredContests = await pool.query(
-            "SELECT id FROM contests WHERE (entry_end_time <= NOW() OR unlocks_at <= NOW()) AND (status = 'ACTIVE' OR status = 'LIVE_REGISTRATION')"
+            "SELECT id, COALESCE(max_winners, 1) AS max_winners, COALESCE(voucher_amount, entry_fee) AS voucher_amount FROM contests WHERE (entry_end_time <= NOW() OR unlocks_at <= NOW()) AND (status = 'ACTIVE' OR status = 'LIVE_REGISTRATION')"
         );
 
         for (const contest of expiredContests.rows) {
             const contestId = contest.id;
+            const maxWinners = Math.max(1, parseInt(contest.max_winners || 1));
+            const returnAmount = parseFloat(contest.voucher_amount || 100.0);
 
-            // Pick 1 random lucky winner from user_contest_entries using PostgreSQL RANDOM()
-            const winnerQuery = await pool.query(
-                `SELECT id, user_id FROM user_contest_entries
-                 WHERE contest_id = $1 AND is_scratched = FALSE
-                 ORDER BY RANDOM() LIMIT 1`,
-                [contestId]
-            );
-
-            if (winnerQuery.rows.length > 0) {
-                const winnerEntry = winnerQuery.rows[0];
-
-                // 1. Mark winner entry (Assigns WINNER_GRAND_PRIZE voucher code!)
-                await pool.query(
-                    `UPDATE user_contest_entries
-                     SET is_winner = TRUE, is_scratchable = TRUE, voucher_code = 'WINNER_GRAND_PRIZE'
-                     WHERE id = $1`,
-                    [winnerEntry.id]
-                );
-
-                // 2. Mark all other entries as non-winners for 2x refund voucher (Assigns SUPER200 code!)
-                await pool.query(
-                    `UPDATE user_contest_entries
-                     SET is_winner = FALSE, is_scratchable = TRUE, voucher_code = 'SUPER200'
-                     WHERE contest_id = $1 AND id != $2`,
-                    [contestId, winnerEntry.id]
-                );
-
-                // 3. Update contest status to LOCKED_SCRATCHABLE
-                await pool.query(
-                    "UPDATE contests SET status = 'LOCKED_SCRATCHABLE' WHERE id = $1",
-                    [contestId]
-                );
-
-                // 4. Dispatch Winner Notification
-                await pool.query(
-                    `INSERT INTO notifications (user_id, title, body, type, time_ago)
-                     VALUES ($1, $2, $3, $4, $5)`,
-                    [
-                        winnerEntry.user_id,
-                        "🏆 CONGRATULATIONS! YOU WON THE CONTEST!",
-                        `You have been selected as the 1st Place Winner for Contest #${contestId}! Claim your prize now.`,
-                        "contest",
-                        "Just now"
-                    ]
-                );
-            }
+            await executeWinnerDrawForContest(contestId, maxWinners, returnAmount);
         }
     } catch (error) {
         console.error("Winner Selection Algorithm Error:", error.message);
     }
 };
 
+const executeWinnerDrawForContest = async (contestId, maxWinnersCount, nonWinnerReturnAmount) => {
+    const winnersQuery = await pool.query(
+        `SELECT id, user_id FROM user_contest_entries
+         WHERE contest_id = $1 AND is_scratched = FALSE
+         ORDER BY RANDOM() LIMIT $2`,
+        [contestId, maxWinnersCount]
+    );
+
+    if (winnersQuery.rows.length > 0) {
+        const winnerEntryIds = winnersQuery.rows.map(r => r.id);
+        const winnerUserIds = winnersQuery.rows.map(r => r.user_id);
+
+        await pool.query(
+            `UPDATE user_contest_entries
+             SET is_winner = TRUE, is_scratchable = TRUE, voucher_code = 'WINNER_GRAND_PRIZE'
+             WHERE id = ANY($1::int[])`,
+            [winnerEntryIds]
+        );
+
+        const returnFee = parseFloat(nonWinnerReturnAmount || 100.0);
+        await pool.query(
+            `UPDATE user_contest_entries
+             SET is_winner = FALSE,
+                 is_scratchable = TRUE,
+                 voucher_claimed_amount = $2,
+                 voucher_code = 'CASHBACK100'
+             WHERE contest_id = $1 AND NOT (id = ANY($3::int[]))`,
+            [contestId, returnFee, winnerEntryIds]
+        );
+
+        await pool.query(
+            "UPDATE contests SET status = 'LOCKED_SCRATCHABLE' WHERE id = $1",
+            [contestId]
+        );
+
+        for (const userId of winnerUserIds) {
+            await pool.query(
+                `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    userId,
+                    "🏆 CONGRATULATIONS! YOU WON THE GRAND PRIZE!",
+                    `You have been selected as one of the ${maxWinnersCount} lucky winners for Contest #${contestId}! Product dispatched with ₹0 extra fee.`,
+                    "contest",
+                    "Just now"
+                ]
+            );
+        }
+    }
+};
+
 // ======================================
-// 3. JOIN A FLASH CONTEST (Registration Phase: voucher_code is NULL!)
+// 3. ADMIN PANEL API: SET WINNERS COUNT & CASHBACK AMOUNT
+// POST /api/v1/contests/admin/set-winners
+// ======================================
+const setAdminWinnersCount = async (req, res) => {
+    try {
+        const { contestId, maxWinners, nonWinnerRewardAmount, triggerDraw } = req.body;
+
+        if (!contestId) {
+            return res.status(400).json({ success: false, message: "contestId is required" });
+        }
+
+        const winnersCount = Math.max(1, parseInt(maxWinners || 1));
+
+        if (nonWinnerRewardAmount !== undefined && nonWinnerRewardAmount !== null) {
+            const rewardAmount = parseFloat(nonWinnerRewardAmount);
+            await pool.query(
+                "UPDATE contests SET max_winners = $1, voucher_amount = $2 WHERE id = $3",
+                [winnersCount, rewardAmount, contestId]
+            );
+        } else {
+            await pool.query(
+                "UPDATE contests SET max_winners = $1 WHERE id = $2",
+                [winnersCount, contestId]
+            );
+        }
+
+        const cRes = await pool.query("SELECT * FROM contests WHERE id = $1", [contestId]);
+        const contest = cRes.rows[0];
+        const returnAmount = contest ? parseFloat(contest.voucher_amount) : 100.0;
+
+        if (triggerDraw === true) {
+            await executeWinnerDrawForContest(contestId, winnersCount, returnAmount);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Successfully configured contest ${contestId}: ${winnersCount} Winners, ₹${returnAmount} Non-Winner Cashback Return`,
+            contestId: contestId,
+            maxWinners: winnersCount,
+            nonWinnerReturnCashback: returnAmount
+        });
+
+    } catch (error) {
+        console.error("Admin Set Winners Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to set winners/cashback" });
+    }
+};
+
+// ======================================
+// 4. JOIN A FLASH CONTEST (Supports Paying via SuperCoins!)
 // POST /api/v1/contests/join
 // ======================================
 const joinContest = async (req, res) => {
     try {
         const userId = req.user.userId;
-        const { contestId, productId, entryFee } = req.body;
+        const { contestId, productId, entryFee, useSuperCoins } = req.body;
 
         const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
         const cId = contestId || `cnt_${pId}`;
 
-        // Get product details
+        let coinsDeducted = 0;
+        let rupeesDiscount = 0;
+
+        if (useSuperCoins === true) {
+            const userRes = await pool.query("SELECT coins, coins_balance FROM users WHERE id = $1", [userId]);
+            const userCoins = userRes.rows[0] ? parseInt(userRes.rows[0].coins || userRes.rows[0].coins_balance || 0) : 0;
+
+            const requiredCoins = Math.round(fee * 100); // 100 SuperCoins = ₹1
+            coinsDeducted = Math.min(userCoins, requiredCoins);
+            rupeesDiscount = Math.floor(coinsDeducted / 100);
+
+            if (coinsDeducted > 0) {
+                await pool.query(
+                    "UPDATE users SET coins = GREATEST(0, coins - $1), coins_balance = GREATEST(0, coins_balance - $1) WHERE id = $2",
+                    [coinsDeducted, userId]
+                );
+            }
+        }
+
+        const remainingFeePaid = Math.max(0, fee - rupeesDiscount);
+
         const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [pId]);
         const product = productRes.rows[0];
 
         const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
         const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
 
-        // Upsert contest campaign for this product in contests table
         await pool.query(
             `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
              VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), NOW() + INTERVAL '24 hours', NOW() + INTERVAL '48 hours', 'LIVE_REGISTRATION')
              ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
-            [cId, pId, title, subtitle, fee, fee * 2]
+            [cId, pId, title, subtitle, fee, fee]
         );
 
-        // Record user entry in user_contest_entries table WITH voucher_code = NULL during registration phase!
         await pool.query(
             `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratchable, is_scratched, is_winner, voucher_code)
              VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, NULL)
@@ -185,17 +262,21 @@ const joinContest = async (req, res) => {
                 is_winner = FALSE,
                 voucher_code = NULL,
                 created_at = NOW()`,
-            [userId, cId, fee, fee * 2]
+            [userId, cId, remainingFeePaid, fee]
         );
 
-        // Dispatch Notification
+        const updatedUser = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
+        const totalCoins = updatedUser.rows[0] ? updatedUser.rows[0].coins : 0;
+
         await pool.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)
              VALUES ($1, $2, $3, $4, $5)`,
             [
                 userId,
                 "⚡ Flash Contest Slot Joined!",
-                `You have successfully booked your slot for ₹${fee}. Contest unlocks soon!`,
+                coinsDeducted > 0
+                    ? `Booked slot using ${coinsDeducted} SuperCoins (₹${rupeesDiscount} discount) + ₹${remainingFeePaid} cash.`
+                    : `You have successfully booked your slot for ₹${fee}. Contest unlocks soon!`,
                 "contest",
                 "Just now"
             ]
@@ -204,7 +285,11 @@ const joinContest = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: "Joined contest successfully!",
-            contestId: cId
+            contestId: cId,
+            superCoinsUsed: coinsDeducted,
+            rupeesDiscount: rupeesDiscount,
+            remainingFeePaid: remainingFeePaid,
+            remainingSuperCoins: totalCoins
         });
 
     } catch (error) {
@@ -217,7 +302,7 @@ const joinContest = async (req, res) => {
 };
 
 // ======================================
-// 4. SCRATCH & CLAIM REWARD VOUCHER
+// 5. SCRATCH & CLAIM REWARD VOUCHER / CASHBACK
 // POST /api/v1/contests/scratch
 // ======================================
 const scratchVoucher = async (req, res) => {
@@ -237,13 +322,15 @@ const scratchVoucher = async (req, res) => {
 
         const entry = result.rows[0];
         const isWinner = entry ? entry.is_winner : false;
-        const voucherCode = entry ? (entry.voucher_code || 'SUPER200') : 'SUPER200';
+        const voucherCode = entry ? (entry.voucher_code || 'CASHBACK100') : 'CASHBACK100';
+        const returnAmount = entry ? parseFloat(entry.voucher_claimed_amount) : 100.0;
 
         return res.status(200).json({
             success: true,
-            message: isWinner ? "Grand prize claimed!" : "2X Voucher claimed successfully!",
+            message: isWinner ? "Grand prize claimed! Zero extra payment required." : `₹${returnAmount} Cashback / SuperCoins claimed!`,
             isWinner: isWinner,
-            voucherAmount: entry ? parseFloat(entry.voucher_claimed_amount) : 200.0,
+            voucherAmount: returnAmount,
+            superCoinsEarned: Math.round(returnAmount * 100),
             voucherCode: voucherCode
         });
 
@@ -257,7 +344,178 @@ const scratchVoucher = async (req, res) => {
 };
 
 // ======================================
-// 5. CLAIM WINNER GRAND PRIZE & CONFIRM DELIVERY ADDRESS
+// 6. NON-WINNER REDEMPTION 1: INSTANT UPI CASHBACK
+// POST /api/v1/contests/claim-cashback
+// ======================================
+const claimCashback = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const { contestId, upiId } = req.body;
+
+        if (!contestId || !upiId) {
+            return res.status(400).json({ success: false, message: "contestId and upiId are required" });
+        }
+
+        const entryRes = await pool.query(
+            "SELECT * FROM user_contest_entries WHERE contest_id = $1 AND user_id = $2",
+            [contestId, userId]
+        );
+
+        if (entryRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest entry not found" });
+        }
+
+        const entry = entryRes.rows[0];
+        const returnAmount = parseFloat(entry.voucher_claimed_amount || 100.0);
+
+        await pool.query(
+            "UPDATE user_contest_entries SET is_scratched = TRUE WHERE id = $1",
+            [entry.id]
+        );
+
+        await pool.query(
+            `INSERT INTO notifications (user_id, title, body, type, time_ago)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+                userId,
+                "💵 Cashback Refund Transferred!",
+                `Your ₹${returnAmount} contest entry fee refund has been transferred to ${upiId}.`,
+                "contest",
+                "Just now"
+            ]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `₹${returnAmount} cashback transferred successfully to ${upiId}!`,
+            returnAmount: returnAmount,
+            upiId: upiId,
+            referenceId: "UPI-" + crypto.randomInt(100000000, 999999999).toString()
+        });
+
+    } catch (error) {
+        console.error("Claim Cashback Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to claim cashback" });
+    }
+};
+
+// ======================================
+// 7. NON-WINNER REDEMPTION 2: CONVERT TO SUPERCOINS (100 Coins = ₹1)
+// POST /api/v1/contests/claim-supercoins
+// ======================================
+const claimSuperCoins = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const { contestId } = req.body;
+
+        if (!contestId) {
+            return res.status(400).json({ success: false, message: "contestId is required" });
+        }
+
+        const entryRes = await pool.query(
+            "SELECT * FROM user_contest_entries WHERE contest_id = $1 AND user_id = $2",
+            [contestId, userId]
+        );
+
+        if (entryRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest entry not found" });
+        }
+
+        const entry = entryRes.rows[0];
+        const returnAmount = parseFloat(entry.voucher_claimed_amount || 100.0);
+        const coinsToAdd = Math.round(returnAmount * 100);
+
+        await pool.query("UPDATE user_contest_entries SET is_scratched = TRUE WHERE id = $1", [entry.id]);
+
+        const userRes = await pool.query(
+            "UPDATE users SET coins = COALESCE(coins, 0) + $1, coins_balance = COALESCE(coins_balance, 0) + $1 WHERE id = $2 RETURNING coins",
+            [coinsToAdd, userId]
+        );
+
+        const totalCoins = userRes.rows[0] ? userRes.rows[0].coins : coinsToAdd;
+
+        await pool.query(
+            `INSERT INTO notifications (user_id, title, body, type, time_ago)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+                userId,
+                "⚡ SuperCoins Credited!",
+                `${coinsToAdd} SuperCoins (Worth ₹${returnAmount}) credited to your account.`,
+                "contest",
+                "Just now"
+            ]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `${coinsToAdd} SuperCoins credited successfully!`,
+            coinsAdded: coinsToAdd,
+            totalCoins: totalCoins,
+            rupeesWorth: returnAmount
+        });
+
+    } catch (error) {
+        console.error("Claim SuperCoins Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to claim SuperCoins" });
+    }
+};
+
+// ======================================
+// 8. NON-WINNER REDEMPTION 3: BUY AT REMAINING BALANCE
+// POST /api/v1/contests/claim-buy-remaining
+// ======================================
+const claimBuyRemaining = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const { contestId } = req.body;
+
+        if (!contestId) {
+            return res.status(400).json({ success: false, message: "contestId is required" });
+        }
+
+        const entryRes = await pool.query(
+            `SELECT e.*, c.product_id, c.entry_fee, p.title, p.subtitle, p.image_url, p.regular_price
+             FROM user_contest_entries e
+             JOIN contests c ON e.contest_id = c.id
+             LEFT JOIN products p ON c.product_id = p.id
+             WHERE e.contest_id = $1 AND e.user_id = $2`,
+            [contestId, userId]
+        );
+
+        if (entryRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest entry not found" });
+        }
+
+        const row = entryRes.rows[0];
+        const returnAmount = parseFloat(row.voucher_claimed_amount || row.entry_fee || 100.0);
+        const regularPrice = parseFloat(row.regular_price || 3599.0);
+        const remainingBalance = Math.max(0, regularPrice - returnAmount);
+
+        await pool.query("UPDATE user_contest_entries SET is_scratched = TRUE WHERE id = $1", [row.id]);
+
+        return res.status(200).json({
+            success: true,
+            message: "Remaining balance checkout calculated",
+            product: {
+                id: row.product_id || 'shoe_1',
+                title: row.title || 'Nike Air Force 1',
+                subtitle: row.subtitle || 'CHICAGO EDITION',
+                imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                regularPrice: regularPrice,
+                entryFeePaid: returnAmount,
+                remainingBalanceToPay: remainingBalance,
+                voucherCode: row.voucher_code || 'CASHBACK100'
+            }
+        });
+
+    } catch (error) {
+        console.error("Claim Buy Remaining Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to calculate remaining balance" });
+    }
+};
+
+// ======================================
+// 9. CLAIM WINNER GRAND PRIZE & CONFIRM DELIVERY ADDRESS
 // POST /api/v1/contests/claim-prize
 // ======================================
 const claimPrize = async (req, res) => {
@@ -274,7 +532,6 @@ const claimPrize = async (req, res) => {
             });
         }
 
-        // Verify user is the winner of this contest
         const entryRes = await client.query(
             "SELECT * FROM user_contest_entries WHERE contest_id = $1 AND user_id = $2 AND is_winner = TRUE",
             [contestId, userId]
@@ -283,18 +540,16 @@ const claimPrize = async (req, res) => {
         if (entryRes.rows.length === 0) {
             return res.status(403).json({
                 success: false,
-                message: "User is not the winner of this contest"
+                message: "User is not a winner of this contest"
             });
         }
 
         await client.query("BEGIN");
 
-        // Get contest product details
         const contestRes = await client.query("SELECT * FROM contests WHERE id = $1", [contestId]);
         const contest = contestRes.rows[0];
         const productId = contest ? contest.product_id : 'shoe_1';
 
-        // Upsert contest_winners record
         await client.query(
             `INSERT INTO contest_winners (contest_id, user_id, product_id, claim_status, delivery_address)
              VALUES ($1, $2, $3, $4, $5)
@@ -303,10 +558,8 @@ const claimPrize = async (req, res) => {
             [contestId, userId, productId, 'ADDRESS_CONFIRMED', JSON.stringify(deliveryAddress)]
         );
 
-        // Generate clean Order ID e.g. SK-WIN-849201 for Admin Dispatch
         const orderId = "SK-WIN-" + crypto.randomInt(100000, 999999).toString();
 
-        // Create FREE Winner Order Record in orders table
         await client.query(
             `INSERT INTO orders (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -315,21 +568,20 @@ const claimPrize = async (req, res) => {
                 userId,
                 JSON.stringify([{ productId: productId, quantity: 1, isGrandPrize: true }]),
                 JSON.stringify(deliveryAddress),
-                'GRAND_PRIZE_FREE',
+                'CONTEST_ENTRY_PAID_FREE_DISPATCH',
                 0.00,
                 0.00,
                 'CONFIRMED'
             ]
         );
 
-        // Dispatch Prize Confirmation Notification
         await client.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)
              VALUES ($1, $2, $3, $4, $5)`,
             [
                 userId,
-                "📦 Prize Dispatch In Progress!",
-                `Your free 1st Place Winner Order #${orderId} has been confirmed for delivery. Admin is processing dispatch!`,
+                "📦 Grand Prize Dispatched!",
+                `Your Grand Prize Order #${orderId} has been confirmed with ₹0 extra payment! Dispatch in progress.`,
                 "order",
                 "Just now"
             ]
@@ -339,10 +591,10 @@ const claimPrize = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Prize claimed successfully! Your product order has been dispatched for delivery.",
+            message: "Prize claimed successfully! Product dispatched with ₹0 extra charge.",
             orderId: orderId,
             claimStatus: "ADDRESS_CONFIRMED",
-            estimatedDelivery: "Delivered by Wednesday, 04th Nov"
+            estimatedDelivery: "Delivered in 7-8 business days"
         });
 
     } catch (error) {
@@ -358,7 +610,7 @@ const claimPrize = async (req, res) => {
 };
 
 // ======================================
-// 6. GET COMPLETED CONTEST HISTORY FOR USER
+// 10. GET COMPLETED CONTEST HISTORY FOR USER
 // GET /api/v1/contests/history
 // ======================================
 const getContestHistory = async (req, res) => {
@@ -375,8 +627,8 @@ const getContestHistory = async (req, res) => {
 
         const result = await pool.query(
             `SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
-                    p.image_url,
-                    e.is_winner, e.voucher_code, e.created_at
+                    p.image_url, p.regular_price,
+                    e.is_winner, e.voucher_code, e.voucher_claimed_amount, e.created_at
              FROM user_contest_entries e
              JOIN contests c ON e.contest_id = c.id
              LEFT JOIN products p ON c.product_id = p.id
@@ -385,17 +637,22 @@ const getContestHistory = async (req, res) => {
             [userId]
         );
 
-        const formattedHistory = result.rows.map(row => ({
-            id: String(row.id),
-            shoeTitle: row.title,
-            shoeSubtitle: row.subtitle,
-            imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
-            winOfferPrice: parseFloat(row.entry_fee),
-            voucherAmount: parseFloat(row.voucher_amount || 200.0),
-            voucherCode: row.voucher_code || 'SUPER200',
-            isWinner: row.is_winner || false,
-            completedAt: 'Just now'
-        }));
+        const formattedHistory = result.rows.map(row => {
+            const returnAmount = parseFloat(row.voucher_claimed_amount || row.voucher_amount || 100.0);
+            return {
+                id: String(row.id),
+                shoeTitle: row.title,
+                shoeSubtitle: row.subtitle,
+                imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                winOfferPrice: parseFloat(row.entry_fee),
+                regularPrice: parseFloat(row.regular_price || 3599.0),
+                voucherAmount: returnAmount,
+                superCoinsAmount: Math.round(returnAmount * 100),
+                voucherCode: row.voucher_code || 'CASHBACK100',
+                isWinner: row.is_winner || false,
+                completedAt: 'Just now'
+            };
+        });
 
         return res.status(200).json({
             success: true,
@@ -414,8 +671,12 @@ const getContestHistory = async (req, res) => {
 
 module.exports = {
     getMyActiveContest,
+    setAdminWinnersCount,
     joinContest,
     scratchVoucher,
+    claimCashback,
+    claimSuperCoins,
+    claimBuyRemaining,
     claimPrize,
     getContestHistory
 };

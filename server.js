@@ -13,7 +13,6 @@ const bannerRoutes = require("./routes/bannerRoutes");
 const productRoutes = require("./routes/productRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const locationRoutes = require("./routes/locationRoutes");
-const cartRoutes = require("./routes/cartRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const contestRoutes = require("./routes/contestRoutes");
 
@@ -35,7 +34,6 @@ app.use("/api/v1/banners", bannerRoutes);
 app.use("/api/v1/products", productRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/location", locationRoutes);
-app.use("/api/v1/cart", cartRoutes);
 app.use("/api/v1/orders", orderRoutes);
 app.use("/api/v1/contests", contestRoutes);
 

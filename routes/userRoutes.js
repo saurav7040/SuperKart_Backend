@@ -10,6 +10,7 @@ router.use(authMiddleware);
 // User Profile APIs
 router.get("/profile", userController.getProfile);
 router.put("/profile", userController.updateProfile);
+router.post("/upload-profile-pic", userController.upload.single("image"), userController.uploadProfilePic);
 
 // Mobile / Email Update with OTP Verification
 router.post("/update-contact/send-otp", userController.updateContactSendOtp);

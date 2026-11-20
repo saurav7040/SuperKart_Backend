@@ -1,7 +1,24 @@
 const { pool } = require("../config/db");
 
+// Dynamic Time Ago Helper Function
+const calculateTimeAgo = (createdAt) => {
+    if (!createdAt) return 'Just now';
+    const now = new Date();
+    const created = new Date(createdAt);
+    const diffMs = now - created;
+
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) return `${diffDays}d ago`;
+    if (diffHours > 0) return `${diffHours}h ago`;
+    if (diffMins > 0) return `${diffMins}m ago`;
+    return 'Just now';
+};
+
 // ======================================
-// 1. GET ALL USER NOTIFICATIONS
+// 1. GET ALL USER NOTIFICATIONS (With Dynamic Live Time-Ago Calculation!)
 // GET /api/v1/notifications
 // ======================================
 const getNotifications = async (req, res) => {
@@ -22,7 +39,7 @@ const getNotifications = async (req, res) => {
             id: String(row.id),
             title: row.title,
             body: row.body,
-            timeAgo: row.time_ago || 'Just now',
+            timeAgo: calculateTimeAgo(row.created_at), // Dynamic live calculation!
             isRead: row.is_read || false,
             type: row.type || 'general'
         }));
@@ -74,7 +91,7 @@ const markAllAsRead = async (req, res) => {
 };
 
 // ======================================
-// 3. CREATE NOTIFICATION (ADMIN API)
+// 3. CREATE NOTIFICATION (ADMIN API - Automatically assigns NOW() timestamp)
 // POST /api/v1/notifications
 // ======================================
 const createNotification = async (req, res) => {
@@ -89,8 +106,8 @@ const createNotification = async (req, res) => {
         }
 
         const result = await pool.query(
-            `INSERT INTO notifications (user_id, title, body, type, time_ago)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO notifications (user_id, title, body, type, time_ago, created_at)
+             VALUES ($1, $2, $3, $4, $5, NOW())
              RETURNING *`,
             [
                 userId || null,
@@ -148,9 +165,42 @@ const markSingleAsRead = async (req, res) => {
     }
 };
 
+// ======================================
+// 5. DELETE NOTIFICATION
+// DELETE /api/v1/notifications/:id
+// ======================================
+const deleteNotification = async (req, res) => {
+    try {
+        const notifId = req.params.id;
+        const userId = req.user ? req.user.userId : null;
+
+        if (userId) {
+            await pool.query(
+                "DELETE FROM notifications WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)",
+                [notifId, userId]
+            );
+        } else {
+            await pool.query("DELETE FROM notifications WHERE id = $1", [notifId]);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Notification deleted successfully"
+        });
+
+    } catch (error) {
+        console.error("Delete Notification Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Unable to delete notification"
+        });
+    }
+};
+
 module.exports = {
     getNotifications,
     markAllAsRead,
     createNotification,
-    markSingleAsRead
+    markSingleAsRead,
+    deleteNotification
 };

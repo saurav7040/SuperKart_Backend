@@ -1,19 +1,19 @@
 const { pool } = require("../config/db");
 
 // ======================================
-// 1. GET ALL LIVE CONTEST PRODUCTS (Filtered by active entry window)
+// 1. GET ALL LIVE CONTEST PRODUCTS (Filtered by OPEN contest window!)
 // GET /api/v1/products?category=shoes|smartphones|all
 // ======================================
 const getProducts = async (req, res) => {
     try {
         const { category } = req.query;
 
-        // SQL Query: Only fetch products whose contest entry window is currently LIVE in the present time!
+        // SQL Query: ONLY fetch products with an active OPEN contest entry window!
         let query = `
             SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
             FROM products p
             JOIN contests c ON p.id = c.product_id
-            WHERE c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()
+            WHERE (c.status IN ('ACTIVE', 'LIVE_REGISTRATION') OR (c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()))
             ORDER BY p.id ASC
         `;
 
@@ -25,7 +25,7 @@ const getProducts = async (req, res) => {
                 FROM products p
                 JOIN contests c ON p.id = c.product_id
                 WHERE p.category = $1
-                  AND c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()
+                  AND (c.status IN ('ACTIVE', 'LIVE_REGISTRATION') OR (c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()))
                 ORDER BY p.id ASC
             `;
             params = [category];
@@ -40,11 +40,6 @@ const getProducts = async (req, res) => {
             category: row.category || 'shoes',
             regularPrice: parseFloat(row.regular_price),
             winOfferPrice: parseFloat(row.win_offer_price),
-            mrpPrice: parseFloat(row.regular_price * 1.5),
-            discountPercent: Math.round(((parseFloat(row.regular_price * 1.5) - parseFloat(row.regular_price)) / parseFloat(row.regular_price * 1.5)) * 100),
-            rating: parseFloat(row.rating || 4.8),
-            totalRatings: parseInt(row.total_ratings || 1000),
-            totalReviews: parseInt(row.total_reviews || 200),
             imageUrl: row.image_url,
             imagesList: Array.isArray(row.images_list)
                 ? row.images_list
@@ -54,28 +49,14 @@ const getProducts = async (req, res) => {
                 : (typeof row.available_colors === 'string' ? JSON.parse(row.available_colors) : ['#EF4444', '#F59E0B', '#3B82F6', '#111827']),
             availableSizes: row.category === 'smartphones' ? [] : ['IND-6', 'IND-7', 'IND-8', 'IND-9', 'IND-10'],
             availableColors: ['Black', 'Blue', 'White'],
-            deliveryEstimate: 'Delivered by Wednesday, 04th Nov',
+            deliveryEstimate: 'Delivered in 7-8 business days',
             brand: 'SuperKart Official',
             highlights: {
                 'Brand': row.title,
                 'Category': row.category === 'smartphones' ? 'Smartphone 📱' : 'Sneaker 👟',
                 'Warranty': '1 Year Brand Warranty',
                 'Return Policy': '7 Days Easy Returns'
-            },
-            reviewsList: [
-                {
-                    id: 'rev_1',
-                    userName: 'Rahul Sharma',
-                    rating: 5.0,
-                    comment: 'Awesome product! Great quality and super fast delivery.'
-                },
-                {
-                    id: 'rev_2',
-                    userName: 'Anjali Verma',
-                    rating: 4.5,
-                    comment: 'Extremely satisfied with the purchase! Worth every rupee.'
-                }
-            ]
+            }
         }));
 
         return res.status(200).json({
@@ -121,11 +102,6 @@ const getProductById = async (req, res) => {
             category: row.category || 'shoes',
             regularPrice: parseFloat(row.regular_price),
             winOfferPrice: parseFloat(row.win_offer_price),
-            mrpPrice: parseFloat(row.regular_price * 1.5),
-            discountPercent: Math.round(((parseFloat(row.regular_price * 1.5) - parseFloat(row.regular_price)) / parseFloat(row.regular_price * 1.5)) * 100),
-            rating: parseFloat(row.rating || 4.8),
-            totalRatings: parseInt(row.total_ratings || 1000),
-            totalReviews: parseInt(row.total_reviews || 200),
             imageUrl: row.image_url,
             imagesList: Array.isArray(row.images_list)
                 ? row.images_list
@@ -135,28 +111,14 @@ const getProductById = async (req, res) => {
                 : (typeof row.available_colors === 'string' ? JSON.parse(row.available_colors) : ['#EF4444', '#F59E0B', '#3B82F6', '#111827']),
             availableSizes: row.category === 'smartphones' ? [] : ['IND-6', 'IND-7', 'IND-8', 'IND-9', 'IND-10'],
             availableColors: ['Black', 'Blue', 'White'],
-            deliveryEstimate: 'Delivered by Wednesday, 04th Nov',
+            deliveryEstimate: 'Delivered in 7-8 business days',
             brand: 'SuperKart Official',
             highlights: {
                 'Brand': row.title,
                 'Category': row.category === 'smartphones' ? 'Smartphone 📱' : 'Sneaker 👟',
                 'Warranty': '1 Year Brand Warranty',
                 'Return Policy': '7 Days Easy Returns'
-            },
-            reviewsList: [
-                {
-                    id: 'rev_1',
-                    userName: 'Rahul Sharma',
-                    rating: 5.0,
-                    comment: 'Awesome product! Great quality and super fast delivery.'
-                },
-                {
-                    id: 'rev_2',
-                    userName: 'Anjali Verma',
-                    rating: 4.5,
-                    comment: 'Extremely satisfied with the purchase! Worth every rupee.'
-                }
-            ]
+            }
         };
 
         return res.status(200).json({
@@ -187,9 +149,6 @@ const createProduct = async (req, res) => {
             category,
             regularPrice,
             winOfferPrice,
-            rating,
-            totalRatings,
-            totalReviews,
             imageUrl,
             imagesList,
             availableHexColors
@@ -207,8 +166,8 @@ const createProduct = async (req, res) => {
 
         const result = await pool.query(
             `INSERT INTO products
-            (id, title, subtitle, category, regular_price, win_offer_price, rating, total_ratings, total_reviews, image_url, images_list, available_colors)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            (id, title, subtitle, category, regular_price, win_offer_price, image_url, images_list, available_colors)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title,
                 subtitle = EXCLUDED.subtitle,
@@ -225,9 +184,6 @@ const createProduct = async (req, res) => {
                 category || "shoes",
                 regularPrice,
                 winOfferPrice,
-                rating || 4.8,
-                totalRatings || 1000,
-                totalReviews || 200,
                 imageUrl.trim(),
                 imagesJson,
                 colorsJson
