@@ -1,8 +1,12 @@
 const express = require("express");
 const router = express.Router();
+const authMiddleware = require("../middleware/authMiddleware");
 const notificationController = require("../controllers/notificationController");
 
-// Public & Protected APIs
+// Attach Authentication Middleware so req.user.userId is always decoded from JWT!
+router.use(authMiddleware);
+
+// Protected Notification APIs
 router.get("/", notificationController.getNotifications);
 router.put("/mark-read", notificationController.markAllAsRead);
 router.put("/:id/mark-read", notificationController.markSingleAsRead);
