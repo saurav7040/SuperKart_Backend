@@ -37,6 +37,18 @@ app.use("/api/v1/location", locationRoutes);
 app.use("/api/v1/orders", orderRoutes);
 app.use("/api/v1/contests", contestRoutes);
 
+// Global Express & Multer Error Handler
+app.use((err, req, res, next) => {
+    if (err) {
+        if (err.message === 'Request aborted' || err.code === 'ECONNRESET') {
+            return res.status(400).json({ success: false, message: "Upload request canceled by client" });
+        }
+        console.error("Express Global Error:", err.message);
+        return res.status(500).json({ success: false, message: err.message || "Internal server error" });
+    }
+    next();
+});
+
 // Start Server
 const startServer = async () => {
     try {
