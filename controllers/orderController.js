@@ -16,6 +16,46 @@ const getDynamicDeliveryDate = (createdAt) => {
     return `Delivered by ${dayName}, ${dayNum}th ${monthName}`;
 };
 
+// Helper: Process Referral Reward when referred friend converts (Wins grand prize or purchases product)
+const processReferralReward = async (userId) => {
+    try {
+        const userRes = await pool.query(
+            "SELECT id, referred_by_id, is_referral_rewarded FROM users WHERE id = $1",
+            [userId]
+        );
+        const user = userRes.rows[0];
+
+        if (user && user.referred_by_id && !user.is_referral_rewarded) {
+            const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
+            const rewardCoins = Math.round(rewardAmount * 100);
+
+            await pool.query(
+                "UPDATE users SET coins = coins + $1, coins_balance = coins_balance + $1 WHERE id = $2",
+                [rewardCoins, user.referred_by_id]
+            );
+
+            await pool.query(
+                "UPDATE users SET is_referral_rewarded = TRUE WHERE id = $1",
+                [userId]
+            );
+
+            await pool.query(
+                `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    user.referred_by_id,
+                    `🎉 ₹${Math.round(rewardAmount)} Referral Cashback Credited!`,
+                    `You earned ₹${Math.round(rewardAmount)} cashback because your referred friend purchased a product!`,
+                    "reward",
+                    "Just now"
+                ]
+            );
+        }
+    } catch (err) {
+        console.error("Referral Bonus Error:", err.message);
+    }
+};
+
 // ======================================
 // 1. PLACE NEW ORDER (STEP 3 CHECKOUT)
 // POST /api/v1/orders/place-order
@@ -91,6 +131,9 @@ const placeOrder = async (req, res) => {
 
         await client.query("COMMIT");
 
+        // Process referral cashback reward to Referrer User A when referred friend converts!
+        await processReferralReward(userId);
+
         return res.status(201).json({
             success: true,
             message: "Order placed successfully!",
@@ -114,89 +157,95 @@ const placeOrder = async (req, res) => {
 };
 
 // ======================================
-// 2. GET USER PAST & LIVE ORDERS (MY ORDERS TRACKING)
+// 2. GET MY ORDERS WITH LIVE 4-STEP TRACKING
 // GET /api/v1/orders/my-orders
 // ======================================
 const getMyOrders = async (req, res) => {
     try {
-        const userId = req.user ? req.user.userId : null;
-
-        if (!userId) {
-            return res.status(200).json({
-                success: true,
-                message: "No orders for guest user",
-                orders: []
-            });
-        }
+        const userId = req.user.userId;
 
         const result = await pool.query(
             "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC",
             [userId]
         );
 
-        // Products lookup for rich images & titles
-        const productsRes = await pool.query("SELECT id, title, subtitle, image_url, regular_price FROM products");
-        const productMap = {};
-        productsRes.rows.forEach(p => {
-            productMap[p.id] = p;
-        });
-
-        const formattedOrders = result.rows.map(row => {
-            const rawItems = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []);
-            const enrichedItems = rawItems.map(item => {
-                const prod = productMap[item.productId || item.id] || {};
-                return {
-                    productId: item.productId || item.id || 'shoe_1',
-                    title: item.title || prod.title || 'Nike Air Force 1',
-                    subtitle: item.subtitle || prod.subtitle || 'CHICAGO EDITION',
-                    imageUrl: item.imageUrl || prod.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
-                    quantity: item.quantity || 1,
-                    selectedSize: item.selectedSize || 'IND-8',
-                    price: parseFloat(item.price || prod.regular_price || 3599.0),
-                    isGrandPrize: item.isGrandPrize || (row.id.startsWith('SK-WIN-'))
-                };
+        const orders = result.rows.map(row => {
+            const currentStatus = (row.status || 'CONFIRMED').toUpperCase();
+            const createdDate = row.created_at || new Date();
+            const formattedDate = new Date(createdDate).toLocaleDateString('en-IN', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
             });
 
-            const isGrandPrizeOrder = row.id.startsWith('SK-WIN-') || row.payment_method === 'GRAND_PRIZE_FREE' || row.payment_method === 'CONTEST_ENTRY_PAID_FREE_DISPATCH';
-            const statusUpper = (row.status || 'CONFIRMED').toUpperCase();
+            let itemsList = [];
+            try {
+                itemsList = typeof row.items === 'string' ? JSON.parse(row.items) : row.items;
+            } catch (_) {
+                itemsList = [];
+            }
 
-            let trackingStep = 1;
-            if (statusUpper === 'DELIVERED') trackingStep = 4;
-            else if (statusUpper === 'OUT FOR DELIVERY') trackingStep = 3;
-            else if (statusUpper === 'SHIPPED') trackingStep = 2;
+            const item = itemsList.length > 0 ? itemsList[0] : {};
+            const isGrandPrizeFree = item.isGrandPrize === true || parseFloat(row.order_total) === 0;
+
+            const trackingSteps = [
+                {
+                    step: 'CONFIRMED',
+                    title: 'Order Confirmed',
+                    date: formattedDate,
+                    isCompleted: true
+                },
+                {
+                    step: 'SHIPPED',
+                    title: 'Dispatched from Warehouse',
+                    date: currentStatus === 'SHIPPED' || currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED' ? 'In Transit' : 'Pending',
+                    isCompleted: currentStatus === 'SHIPPED' || currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED'
+                },
+                {
+                    step: 'OUT FOR DELIVERY',
+                    title: 'Out for Delivery',
+                    date: currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED' ? 'Arriving Today' : 'Pending',
+                    isCompleted: currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED'
+                },
+                {
+                    step: 'DELIVERED',
+                    title: 'Delivered',
+                    date: getDynamicDeliveryDate(createdDate),
+                    isCompleted: currentStatus === 'DELIVERED'
+                }
+            ];
 
             return {
                 id: row.id,
-                isGrandPrizeOrder: isGrandPrizeOrder,
-                items: enrichedItems,
-                deliveryAddress: typeof row.delivery_address === 'string' ? JSON.parse(row.delivery_address) : row.delivery_address,
-                paymentMethod: row.payment_method,
                 orderTotal: parseFloat(row.order_total),
-                discountAmount: parseFloat(row.discount_amount || 0),
-                status: statusUpper,
-                trackingStep: trackingStep,
-                estimatedDelivery: getDynamicDeliveryDate(row.created_at),
-                createdAt: row.created_at
+                paymentMethod: row.payment_method,
+                status: currentStatus,
+                createdAt: row.created_at,
+                isGrandPrizeFree: isGrandPrizeFree,
+                productTitle: item.title || 'Flash Contest Product',
+                productSubtitle: item.subtitle || 'WINNER EDITION',
+                imageUrl: item.imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                trackingSteps: trackingSteps
             };
         });
 
         return res.status(200).json({
             success: true,
-            message: "My orders fetched successfully",
-            orders: formattedOrders
+            message: "Orders fetched successfully",
+            orders: orders
         });
 
     } catch (error) {
         console.error("Get My Orders Error:", error.message);
         return res.status(500).json({
             success: false,
-            message: "Unable to fetch order history"
+            message: "Unable to fetch orders"
         });
     }
 };
 
 // ======================================
-// 3. ADMIN / TEST API: UPDATE ORDER TRACKING STATUS
+// 3. ADMIN UPDATE ORDER STATUS
 // POST /api/v1/orders/admin/update-status
 // ======================================
 const updateOrderStatus = async (req, res) => {
@@ -210,17 +259,16 @@ const updateOrderStatus = async (req, res) => {
             });
         }
 
-        const validStatuses = ["CONFIRMED", "SHIPPED", "OUT FOR DELIVERY", "DELIVERED"];
+        const validStatuses = ['CONFIRMED', 'SHIPPED', 'OUT FOR DELIVERY', 'DELIVERED'];
         const normalizedStatus = status.toUpperCase();
 
         if (!validStatuses.includes(normalizedStatus)) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid status. Valid values: ${validStatuses.join(", ")}`
+                message: "Invalid status. Must be one of: CONFIRMED, SHIPPED, OUT FOR DELIVERY, DELIVERED"
             });
         }
 
-        // Update status in PostgreSQL orders table
         const result = await pool.query(
             "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *",
             [normalizedStatus, orderId]
@@ -229,20 +277,19 @@ const updateOrderStatus = async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: `Order #${orderId} not found`
+                message: "Order not found"
             });
         }
 
         const order = result.rows[0];
 
-        // Insert notification update for customer
         await pool.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)
              VALUES ($1, $2, $3, $4, $5)`,
             [
                 order.user_id,
-                `📦 Order Status Updated: ${normalizedStatus}`,
-                `Your order #${orderId} is now ${normalizedStatus}.`,
+                `📦 Order Status Update: ${normalizedStatus}`,
+                `Your order #${orderId} is now ${normalizedStatus.toLowerCase()}. Track live in My Orders.`,
                 "order",
                 "Just now"
             ]
@@ -250,10 +297,8 @@ const updateOrderStatus = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: `Order #${orderId} status updated to ${normalizedStatus}`,
-            orderId: orderId,
-            status: normalizedStatus,
-            trackingStep: normalizedStatus === 'DELIVERED' ? 4 : (normalizedStatus === 'OUT FOR DELIVERY' ? 3 : (normalizedStatus === 'SHIPPED' ? 2 : 1))
+            message: `Order #${orderId} updated to ${normalizedStatus}`,
+            order: order
         });
 
     } catch (error) {

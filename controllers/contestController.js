@@ -310,9 +310,6 @@ const joinContest = async (req, res) => {
         const updatedUser = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
         const totalCoins = updatedUser.rows[0] ? updatedUser.rows[0].coins : 0;
 
-        // Process referral bonus if user was referred by a friend & joins first contest!
-        await processReferralReward(userId);
-
         await pool.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)
              VALUES ($1, $2, $3, $4, $5)`,
@@ -633,6 +630,9 @@ const claimPrize = async (req, res) => {
         );
 
         await client.query("COMMIT");
+
+        // Process referral cashback reward to Referrer User A when referred friend wins & claims prize!
+        await processReferralReward(userId);
 
         return res.status(200).json({
             success: true,
