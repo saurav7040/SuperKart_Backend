@@ -191,7 +191,7 @@ const uploadProfilePic = async (req, res) => {
         }
 
         const userId = req.user.userId;
-        const host = req.get('host') || '10.206.145.105:5000';
+        const host = req.get('host') || '10.215.23.105:5000';
         const protocol = req.protocol || 'http';
         const publicUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
 
@@ -266,44 +266,81 @@ const requestPasswordOtp = async (req, res) => {
 };
 
 // ======================================
-// 5. CHANGE PASSWORD WITH OTP VERIFICATION
+// 5. CHANGE PASSWORD API (Supports Old Password Check OR OTP Verification!)
 // PUT /api/v1/users/change-password
 // ======================================
 const changePassword = async (req, res) => {
     try {
-        const { emailOrPhone, otp, newPassword } = req.body;
+        const { currentPassword, newPassword, emailOrPhone, otp } = req.body;
+        const userId = req.user ? req.user.userId : null;
 
-        if (!emailOrPhone || !otp || !newPassword) {
+        if (!newPassword || newPassword.length < 8) {
             return res.status(400).json({
                 success: false,
-                message: "Email/phone, OTP, and new password are required"
+                message: "New password must contain at least 8 characters"
             });
         }
 
-        const otpRes = await pool.query(
-            "SELECT * FROM user_otps WHERE email_or_phone = $1 AND otp_code = $2 AND expires_at > NOW()",
-            [emailOrPhone.trim(), otp.trim()]
-        );
+        let targetUserId = userId;
 
-        if (otpRes.rows.length === 0) {
+        // Path A: Authenticated Change Password via Current Password Check
+        if (currentPassword && userId) {
+            const userRes = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
+            if (userRes.rows.length === 0) {
+                return res.status(404).json({ success: false, message: "User not found" });
+            }
+
+            const user = userRes.rows[0];
+            const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+            if (!isMatch) {
+                return res.status(400).json({ success: false, message: "Incorrect current password!" });
+            }
+        }
+        // Path B: OTP Verification for Forgot / Change Password
+        else if (emailOrPhone && otp) {
+            const identifier = emailOrPhone.trim();
+            const otpRes = await pool.query(
+                "SELECT * FROM user_otps WHERE email_or_phone = $1 AND otp_code = $2 AND expires_at > NOW()",
+                [identifier, otp.trim()]
+            );
+
+            if (otpRes.rows.length === 0) {
+                return res.status(400).json({ success: false, message: "Invalid or expired OTP!" });
+            }
+
+            const userRes = await pool.query("SELECT id FROM users WHERE email = $1 OR phone = $1", [identifier]);
+            if (userRes.rows.length > 0) {
+                targetUserId = userRes.rows[0].id;
+            }
+
+            await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [identifier]);
+        } else {
             return res.status(400).json({
                 success: false,
-                message: "Invalid or expired OTP"
+                message: "Please provide current password or valid OTP code"
             });
         }
 
+        // Hash new password and update in PostgreSQL users table
         const passwordHash = await bcrypt.hash(newPassword, 12);
+        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, targetUserId]);
 
+        // Dispatch security notification
         await pool.query(
-            "UPDATE users SET password_hash = $1 WHERE email = $2 OR phone = $2",
-            [passwordHash, emailOrPhone.trim()]
+            `INSERT INTO notifications (user_id, title, body, type, time_ago)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+                targetUserId,
+                "🔒 Password Changed Successfully",
+                "Your SuperKart account password was updated. If you did not make this change, contact support immediately.",
+                "general",
+                "Just now"
+            ]
         );
-
-        await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [emailOrPhone.trim()]);
 
         return res.status(200).json({
             success: true,
-            message: "Password updated successfully!"
+            message: "Password changed successfully!"
         });
 
     } catch (error) {
