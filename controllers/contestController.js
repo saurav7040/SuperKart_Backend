@@ -1,6 +1,48 @@
 const crypto = require("crypto");
 const { pool } = require("../config/db");
 
+// Dynamic Configurable Referral Cashback Reward (e.g. ₹200)
+const REFERRAL_CASHBACK_REWARD = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
+
+const processReferralReward = async (userId) => {
+    try {
+        const userRes = await pool.query(
+            "SELECT id, referred_by_id, is_referral_rewarded FROM users WHERE id = $1",
+            [userId]
+        );
+        const user = userRes.rows[0];
+
+        if (user && user.referred_by_id && !user.is_referral_rewarded) {
+            const rewardAmount = REFERRAL_CASHBACK_REWARD;
+            const rewardCoins = Math.round(rewardAmount * 100);
+
+            await pool.query(
+                "UPDATE users SET coins = coins + $1, coins_balance = coins_balance + $1 WHERE id = $2",
+                [rewardCoins, user.referred_by_id]
+            );
+
+            await pool.query(
+                "UPDATE users SET is_referral_rewarded = TRUE WHERE id = $1",
+                [userId]
+            );
+
+            await pool.query(
+                `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    user.referred_by_id,
+                    `🎉 ₹${Math.round(rewardAmount)} Referral Cashback Credited!`,
+                    `You earned ₹${Math.round(rewardAmount)} cashback because your referred friend joined their first Flash Contest!`,
+                    "reward",
+                    "Just now"
+                ]
+            );
+        }
+    } catch (err) {
+        console.error("Referral Bonus Error:", err.message);
+    }
+};
+
 // ======================================
 // 1. GET MY ACTIVE UN-SCRATCHED CONTEST ENTRIES
 // GET /api/v1/contests/my-active
@@ -267,6 +309,9 @@ const joinContest = async (req, res) => {
 
         const updatedUser = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
         const totalCoins = updatedUser.rows[0] ? updatedUser.rows[0].coins : 0;
+
+        // Process referral bonus if user was referred by a friend & joins first contest!
+        await processReferralReward(userId);
 
         await pool.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)

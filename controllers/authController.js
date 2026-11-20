@@ -77,11 +77,20 @@ const register = async (req, res) => {
         const passwordHash = await bcrypt.hash(password, 12);
         const referralCode = generateReferralCode();
 
+        let referrerId = null;
+        const refCodeInput = req.body.referredByCode || req.body.referralCodeUsed || req.body.referralCode;
+        if (refCodeInput && refCodeInput.trim().length > 0) {
+            const refRes = await pool.query("SELECT id FROM users WHERE UPPER(referral_code) = UPPER($1)", [refCodeInput.trim()]);
+            if (refRes.rows.length > 0) {
+                referrerId = refRes.rows[0].id;
+            }
+        }
+
         // Insert complete user details into PostgreSQL
         const result = await pool.query(
             `INSERT INTO users
-            (first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, password_hash, referral_code)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            (first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, password_hash, referral_code, referred_by_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id, first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, referral_code, coins_balance, created_at`,
             [
                 effectiveFirstName,
@@ -98,7 +107,8 @@ const register = async (req, res) => {
                 normalizedEmail,
                 normalizedPhone,
                 passwordHash,
-                referralCode
+                referralCode,
+                referrerId
             ]
         );
 

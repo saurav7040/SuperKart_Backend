@@ -7,9 +7,10 @@ const userController = require("../controllers/userController");
 // Authentication required for all user APIs
 router.use(authMiddleware);
 
-// User Profile APIs
+// User Profile & Referral APIs
 router.get("/profile", userController.getProfile);
 router.put("/profile", userController.updateProfile);
+router.get("/referral-details", userController.getReferralDetails);
 router.post("/upload-profile-pic", userController.upload.single("image"), userController.uploadProfilePic);
 
 // Mobile / Email Update with OTP Verification

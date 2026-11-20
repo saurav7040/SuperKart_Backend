@@ -323,7 +323,7 @@ const changePassword = async (req, res) => {
 
         // Hash new password and update in PostgreSQL users table
         const passwordHash = await bcrypt.hash(newPassword, 12);
-        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, targetUserId]);
+        await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [passwordHash, targetUserId]);
 
         // Dispatch security notification
         await pool.query(
@@ -475,6 +475,48 @@ const updateContactConfirm = async (req, res) => {
     }
 };
 
+// ======================================
+// 8. GET REFERRAL DETAILS & STATS
+// GET /api/v1/users/referral-details
+// ======================================
+const getReferralDetails = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const userRes = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        const user = userRes.rows[0];
+
+        const invitedRes = await pool.query("SELECT COUNT(*) FROM users WHERE referred_by_id = $1", [userId]);
+        const rewardedRes = await pool.query("SELECT COUNT(*) FROM users WHERE referred_by_id = $1 AND is_referral_rewarded = TRUE", [userId]);
+
+        const invitedCount = parseInt(invitedRes.rows[0].count || 0);
+        const rewardedCount = parseInt(rewardedRes.rows[0].count || 0);
+
+        const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
+        const totalEarned = rewardedCount * rewardAmount;
+
+        const host = req.get('host') || '10.215.23.105:5000';
+        const protocol = req.protocol || 'http';
+
+        return res.status(200).json({
+            success: true,
+            referralCode: user.referral_code || `REF-${user.id}`,
+            referralRewardAmount: rewardAmount,
+            totalEarnedCommission: totalEarned,
+            totalFriendsInvited: invitedCount,
+            promotionalMessage: `Join SuperKart using my referral code ${user.referral_code || `REF-${user.id}`} and get ₹${Math.round(rewardAmount)} cashback! Win premium shoes & phones at ₹100.`,
+            referralLink: `${protocol}://${host}/app?ref=${user.referral_code || `REF-${user.id}`}`
+        });
+
+    } catch (error) {
+        console.error("Get Referral Details Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch referral details" });
+    }
+};
+
 module.exports = {
     getProfile,
     updateProfile,
@@ -483,5 +525,6 @@ module.exports = {
     requestPasswordOtp,
     changePassword,
     updateContactSendOtp,
-    updateContactConfirm
+    updateContactConfirm,
+    getReferralDetails
 };
