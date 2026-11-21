@@ -353,12 +353,16 @@ const getAdminProducts = async (req, res) => {
             }
             if (parsedColors.length === 0) parsedColors = ['#000000', '#FFFFFF', '#1E3A8A'];
 
+            const catLower = (p.category || 'shoes').toLowerCase();
+            const isPhone = catLower.includes('phone') || catLower.includes('mobile') || catLower.includes('smartphone');
+            const categoryDisplay = isPhone ? 'Phones' : 'Shoes';
+
             return {
                 id: String(p.id),
                 title: p.title,
                 subtitle: p.subtitle || 'LIMITED EDITION',
                 name: `${p.title} | ${p.subtitle || ''}`.trim(),
-                category: (p.category || 'shoes').toLowerCase() === 'smartphones' ? 'Phones' : 'Shoes',
+                category: categoryDisplay,
                 brand: 'SuperKart',
                 price: parseFloat(p.regular_price || 0),
                 winOfferPrice: parseFloat(p.win_offer_price || 100),
@@ -402,13 +406,16 @@ const createAdminProduct = async (req, res) => {
             return res.status(400).json({ success: false, message: "Title and regular price are required" });
         }
 
-        const productId = "shoe_" + Date.now();
+        const catInput = (category || 'shoes').trim().toLowerCase();
+        const isPhoneInput = catInput.includes('phone') || catInput.includes('mobile') || catInput.includes('smartphone');
+        const pCategory = isPhoneInput ? 'smartphones' : 'shoes';
+        const productId = (isPhoneInput ? "phone_" : "shoe_") + Date.now();
+
         const pTitle = title.trim();
         const pSub = subtitle ? subtitle.trim() : 'LIMITED EDITION';
-        const pCategory = category ? category.trim().toLowerCase() : 'shoes';
         const regPrice = parseFloat(regularPrice);
         const winPrice = parseFloat(winOfferPrice || 100.0);
-        const img = imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a';
+        const img = imageUrl || (isPhoneInput ? 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9' : 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a');
 
         // Process Gallery Images List
         let finalImages = [img];
