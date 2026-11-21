@@ -184,7 +184,7 @@ const getAdminDashboard = async (req, res) => {
 };
 
 // ======================================
-// 4. GET PAGINATED REAL USERS LIST
+// 4. GET PAGINATED REAL USERS LIST (WITH COMPLETE PROFILE FIELDS)
 // GET /api/v1/admin/users
 // ======================================
 const getAdminUsers = async (req, res) => {
@@ -194,13 +194,13 @@ const getAdminUsers = async (req, res) => {
         const search = (req.query.search || '').trim();
         const offset = (page - 1) * limit;
 
-        let query = "SELECT id, first_name, last_name, email, phone, referral_code, created_at FROM users";
+        let query = "SELECT id, first_name, last_name, gender, date_of_birth, age, email, phone, city_village, state, pincode, house_no, street_landmark, referral_code, coins, profile_pic_url, created_at FROM users";
         let countQuery = "SELECT COUNT(*) FROM users";
         let params = [];
 
         if (search) {
-            query += " WHERE LOWER(first_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1";
-            countQuery += " WHERE LOWER(first_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1";
+            query += " WHERE LOWER(first_name) LIKE $1 OR LOWER(last_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1 OR LOWER(city_village) LIKE $1";
+            countQuery += " WHERE LOWER(first_name) LIKE $1 OR LOWER(last_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1 OR LOWER(city_village) LIKE $1";
             params.push(`%${search.toLowerCase()}%`);
         }
 
@@ -213,9 +213,16 @@ const getAdminUsers = async (req, res) => {
         const formattedUsers = result.rows.map(user => ({
             id: String(user.id),
             full_name: `${user.first_name} ${user.last_name || ''}`.trim(),
+            gender: user.gender || 'Male',
+            dob: user.date_of_birth || 'N/A',
+            age: user.age || 18,
             email: user.email || 'N/A',
             phone: user.phone || 'N/A',
+            location: user.city_village && user.state ? `${user.city_village}, ${user.state}` : 'N/A',
+            address: user.house_no && user.street_landmark ? `${user.house_no}, ${user.street_landmark}, ${user.city_village}, ${user.state} - ${user.pincode}` : 'N/A',
             referral_code: user.referral_code || `REF-${user.id}`,
+            coins: parseInt(user.coins || 0),
+            profile_pic_url: user.profile_pic_url,
             is_active: true,
             created_at: new Date(user.created_at || new Date()).toLocaleDateString('en-IN')
         }));

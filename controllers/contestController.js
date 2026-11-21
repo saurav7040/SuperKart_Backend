@@ -17,7 +17,7 @@ const processReferralReward = async (userId) => {
             const rewardCoins = Math.round(rewardAmount * 100);
 
             await pool.query(
-                "UPDATE users SET coins = coins + $1, coins_balance = coins_balance + $1 WHERE id = $2",
+                "UPDATE users SET coins = coins + $1 WHERE id = $2",
                 [rewardCoins, user.referred_by_id]
             );
 
@@ -266,8 +266,8 @@ const joinContest = async (req, res) => {
         let rupeesDiscount = 0;
 
         if (useSuperCoins === true) {
-            const userRes = await pool.query("SELECT coins, coins_balance FROM users WHERE id = $1", [userId]);
-            const userCoins = userRes.rows[0] ? parseInt(userRes.rows[0].coins || userRes.rows[0].coins_balance || 0) : 0;
+            const userRes = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
+            const userCoins = userRes.rows[0] ? parseInt(userRes.rows[0].coins || 0) : 0;
 
             const requiredCoins = Math.round(fee * 100); // 100 SuperCoins = ₹1
             coinsDeducted = Math.min(userCoins, requiredCoins);
@@ -275,7 +275,7 @@ const joinContest = async (req, res) => {
 
             if (coinsDeducted > 0) {
                 await pool.query(
-                    "UPDATE users SET coins = GREATEST(0, coins - $1), coins_balance = GREATEST(0, coins_balance - $1) WHERE id = $2",
+                    "UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2",
                     [coinsDeducted, userId]
                 );
             }
@@ -470,7 +470,7 @@ const claimSuperCoins = async (req, res) => {
         await pool.query("UPDATE user_contest_entries SET is_scratched = TRUE WHERE id = $1", [entry.id]);
 
         const userRes = await pool.query(
-            "UPDATE users SET coins = COALESCE(coins, 0) + $1, coins_balance = COALESCE(coins_balance, 0) + $1 WHERE id = $2 RETURNING coins",
+            "UPDATE users SET coins = COALESCE(coins, 0) + $1 WHERE id = $2 RETURNING coins",
             [coinsToAdd, userId]
         );
 

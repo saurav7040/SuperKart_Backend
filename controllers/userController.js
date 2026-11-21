@@ -58,8 +58,8 @@ const getProfile = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || '',
-            coins: parseInt(user.coins || user.coins_balance || 0),
-            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
+            coins: parseInt(user.coins || 0),
+            coinsBalance: parseInt(user.coins || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -159,8 +159,8 @@ const updateProfile = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || emailOrPhone,
-            coins: parseInt(user.coins || user.coins_balance || 0),
-            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
+            coins: parseInt(user.coins || 0),
+            coinsBalance: parseInt(user.coins || 0),
             profilePicUrl: user.profile_pic_url
         };
 
@@ -455,8 +455,8 @@ const updateContactConfirm = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
-            coins: parseInt(user.coins || user.coins_balance || 0),
-            coinsBalance: parseInt(user.coins || user.coins_balance || 0),
+            coins: parseInt(user.coins || 0),
+            coinsBalance: parseInt(user.coins || 0),
             profilePicUrl: user.profile_pic_url
         };
 

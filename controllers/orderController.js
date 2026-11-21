@@ -30,7 +30,7 @@ const processReferralReward = async (userId) => {
             const rewardCoins = Math.round(rewardAmount * 100);
 
             await pool.query(
-                "UPDATE users SET coins = coins + $1, coins_balance = coins_balance + $1 WHERE id = $2",
+                "UPDATE users SET coins = coins + $1 WHERE id = $2",
                 [rewardCoins, user.referred_by_id]
             );
 
@@ -77,7 +77,7 @@ const placeOrder = async (req, res) => {
         if (superCoinsUsed && parseInt(superCoinsUsed) > 0) {
             const coinsToDeduct = parseInt(superCoinsUsed);
             await client.query(
-                "UPDATE users SET coins = GREATEST(0, coins - $1), coins_balance = GREATEST(0, coins_balance - $1) WHERE id = $2",
+                "UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2",
                 [coinsToDeduct, userId]
             );
         }
