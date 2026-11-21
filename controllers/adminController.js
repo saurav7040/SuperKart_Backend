@@ -346,13 +346,14 @@ const createAdminProduct = async (req, res) => {
         const winPrice = parseFloat(winOfferPrice || 100.0);
         const img = imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a';
 
-        const colors = '#000000,#FFFFFF,#1E3A8A';
+        const colorsJson = JSON.stringify(['#000000', '#FFFFFF', '#1E3A8A']);
+        const imagesJson = JSON.stringify([img]);
 
         const result = await pool.query(
-            `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url, available_colors)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url, available_colors, images_list)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
-            [productId, pTitle, pSub, pCategory, regPrice, winPrice, img, colors]
+            [productId, pTitle, pSub, pCategory, regPrice, winPrice, img, colorsJson, imagesJson]
         );
 
         // Also seed active contest drop in contests table!
@@ -382,7 +383,7 @@ const createAdminProduct = async (req, res) => {
 
     } catch (error) {
         console.error("Create Admin Product Error:", error.message);
-        return res.status(500).json({ success: false, message: "Failed to create product" });
+        return res.status(500).json({ success: false, message: error.message || "Failed to create product" });
     }
 };
 
