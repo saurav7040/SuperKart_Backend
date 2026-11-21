@@ -336,22 +336,42 @@ const getAdminProducts = async (req, res) => {
         const countRes = await pool.query(countQuery, params);
         const total = parseInt(countRes.rows[0].count || 0);
 
-        const formattedProducts = result.rows.map(p => ({
-            id: String(p.id),
-            title: p.title,
-            subtitle: p.subtitle || 'LIMITED EDITION',
-            name: `${p.title} | ${p.subtitle || ''}`.trim(),
-            category: (p.category || 'shoes').toLowerCase() === 'smartphones' ? 'Phones' : 'Shoes',
-            brand: 'SuperKart',
-            price: parseFloat(p.regular_price || 0),
-            winOfferPrice: parseFloat(p.win_offer_price || 100),
-            image_url: p.image_url,
-            contest_id: p.contest_id || `cnt_${p.id}`,
-            max_winners: parseInt(p.max_winners || 5),
-            joined_count: parseInt(p.joined_count || 0),
-            contest_status: p.contest_status || 'LIVE_REGISTRATION',
-            status: 'Active'
-        }));
+        const formattedProducts = result.rows.map(p => {
+            let parsedImages = [];
+            try {
+                parsedImages = typeof p.images_list === 'string' ? JSON.parse(p.images_list) : (p.images_list || []);
+            } catch (_) {
+                parsedImages = [];
+            }
+            if (parsedImages.length === 0 && p.image_url) parsedImages = [p.image_url];
+
+            let parsedColors = [];
+            try {
+                parsedColors = typeof p.available_colors === 'string' ? JSON.parse(p.available_colors) : (p.available_colors || []);
+            } catch (_) {
+                parsedColors = [];
+            }
+            if (parsedColors.length === 0) parsedColors = ['#000000', '#FFFFFF', '#1E3A8A'];
+
+            return {
+                id: String(p.id),
+                title: p.title,
+                subtitle: p.subtitle || 'LIMITED EDITION',
+                name: `${p.title} | ${p.subtitle || ''}`.trim(),
+                category: (p.category || 'shoes').toLowerCase() === 'smartphones' ? 'Phones' : 'Shoes',
+                brand: 'SuperKart',
+                price: parseFloat(p.regular_price || 0),
+                winOfferPrice: parseFloat(p.win_offer_price || 100),
+                image_url: p.image_url,
+                images_list: parsedImages,
+                available_colors: parsedColors,
+                contest_id: p.contest_id || `cnt_${p.id}`,
+                max_winners: parseInt(p.max_winners || 5),
+                joined_count: parseInt(p.joined_count || 0),
+                contest_status: p.contest_status || 'LIVE_REGISTRATION',
+                status: 'Active'
+            };
+        });
 
         return res.status(200).json({
             success: true,
@@ -371,12 +391,12 @@ const getAdminProducts = async (req, res) => {
 };
 
 // ======================================
-// 7. CREATE NEW PRODUCT (WITH CONTEST DROP)
+// 7. CREATE NEW PRODUCT (WITH GALLERY IMAGES & COLOR SWATCHES)
 // POST /api/v1/admin/products
 // ======================================
 const createAdminProduct = async (req, res) => {
     try {
-        const { title, subtitle, category, regularPrice, winOfferPrice, imageUrl } = req.body;
+        const { title, subtitle, category, regularPrice, winOfferPrice, imageUrl, imagesList, availableColors } = req.body;
 
         if (!title || !regularPrice) {
             return res.status(400).json({ success: false, message: "Title and regular price are required" });
@@ -390,8 +410,25 @@ const createAdminProduct = async (req, res) => {
         const winPrice = parseFloat(winOfferPrice || 100.0);
         const img = imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a';
 
-        const colorsJson = JSON.stringify(['#000000', '#FFFFFF', '#1E3A8A']);
-        const imagesJson = JSON.stringify([img]);
+        // Process Gallery Images List
+        let finalImages = [img];
+        if (Array.isArray(imagesList) && imagesList.length > 0) {
+            finalImages = imagesList.filter(url => typeof url === 'string' && url.trim().length > 0);
+        } else if (typeof imagesList === 'string' && imagesList.trim().length > 0) {
+            finalImages = imagesList.split(/[\n,]+/).map(url => url.trim()).filter(url => url.length > 0);
+        }
+        if (!finalImages.includes(img)) finalImages.unshift(img);
+
+        // Process Available Color Swatches
+        let finalColors = ['#000000', '#FFFFFF', '#1E3A8A'];
+        if (Array.isArray(availableColors) && availableColors.length > 0) {
+            finalColors = availableColors.filter(c => typeof c === 'string' && c.trim().length > 0);
+        } else if (typeof availableColors === 'string' && availableColors.trim().length > 0) {
+            finalColors = availableColors.split(/[\n,]+/).map(c => c.trim()).filter(c => c.length > 0);
+        }
+
+        const colorsJson = JSON.stringify(finalColors);
+        const imagesJson = JSON.stringify(finalImages);
 
         const result = await pool.query(
             `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url, available_colors, images_list)
@@ -413,7 +450,7 @@ const createAdminProduct = async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message: "Product and active contest created successfully!",
+            message: "Product, gallery images, color swatches, and active contest created successfully!",
             product: {
                 id: String(p.id),
                 name: `${p.title} | ${p.subtitle}`,
@@ -421,8 +458,11 @@ const createAdminProduct = async (req, res) => {
                 price: parseFloat(p.regular_price),
                 stock: 50,
                 image_url: p.image_url,
+                images_list: finalImages,
+                available_colors: finalColors,
                 status: 'Active'
             }
+        });
         });
 
     } catch (error) {
