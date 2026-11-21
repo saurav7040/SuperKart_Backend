@@ -91,7 +91,7 @@ const register = async (req, res) => {
             `INSERT INTO users
             (first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, password_hash, referral_code, referred_by_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            RETURNING id, first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, referral_code, coins_balance, created_at`,
+            RETURNING id, first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, referral_code, coins, created_at`,
             [
                 effectiveFirstName,
                 effectiveLastName,
