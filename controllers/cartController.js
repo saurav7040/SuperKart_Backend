@@ -13,7 +13,7 @@ const getCart = async (req, res) => {
         const result = await pool.query(
             `SELECT c.id AS cart_id, c.product_id, c.selected_size, c.quantity,
                     p.title, p.subtitle, p.category, p.regular_price, p.win_offer_price,
-                    p.rating, p.image_url
+                    p.image_url
              FROM user_cart c
              JOIN products p ON c.product_id = p.id
              WHERE c.user_id = $1
