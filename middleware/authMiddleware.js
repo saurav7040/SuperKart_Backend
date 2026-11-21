@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const { pool } = require("../config/db");
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
 
@@ -18,6 +19,28 @@ const authMiddleware = (req, res, next) => {
             process.env.JWT_SECRET
         );
 
+        // Verify live user active status in PostgreSQL database
+        const userRes = await pool.query(
+            "SELECT id, is_active FROM users WHERE id = $1",
+            [decoded.userId]
+        );
+
+        if (userRes.rows.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: "User account no longer exists"
+            });
+        }
+
+        const user = userRes.rows[0];
+
+        if (user.is_active === false) {
+            return res.status(403).json({
+                success: false,
+                message: "Your account has been suspended by administrator 🔒"
+            });
+        }
+
         req.user = {
             userId: decoded.userId
         };
@@ -32,5 +55,4 @@ const authMiddleware = (req, res, next) => {
     }
 };
 
-// IMPORTANT: Export the function directly
 module.exports = authMiddleware;

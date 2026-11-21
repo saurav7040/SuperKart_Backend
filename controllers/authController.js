@@ -199,6 +199,13 @@ const login = async (req, res) => {
 
         const user = result.rows[0];
 
+        if (user.is_active === false) {
+            return res.status(403).json({
+                success: false,
+                message: "Your account has been suspended by administrator. Please contact support. 🔒"
+            });
+        }
+
         // Verify password
         const passwordMatch = await bcrypt.compare(
             password,

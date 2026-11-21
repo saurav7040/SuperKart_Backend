@@ -233,7 +233,7 @@ const getAdminUsers = async (req, res) => {
             is_referral_rewarded: user.referred_by_id ? (user.is_referral_rewarded ? 'Yes (₹200 Paid)' : 'Pending Conversion') : 'N/A',
             coins: parseInt(user.coins || 0),
             profile_pic_url: user.profile_pic_url,
-            is_active: true,
+            is_active: user.is_active !== false,
             created_at: new Date(user.created_at || new Date()).toLocaleDateString('en-IN')
         }));
 
@@ -263,21 +263,27 @@ const updateUserStatus = async (req, res) => {
         const userId = req.params.id;
         const { is_active } = req.body;
 
-        const userRes = await pool.query("SELECT id, first_name, email FROM users WHERE id = $1", [userId]);
-        if (userRes.rows.length === 0) {
+        const activeBool = is_active === true || is_active === 'true';
+
+        const updateRes = await pool.query(
+            "UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, first_name, email, is_active",
+            [activeBool, userId]
+        );
+
+        if (updateRes.rows.length === 0) {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        const user = userRes.rows[0];
+        const user = updateRes.rows[0];
 
         return res.status(200).json({
             success: true,
-            message: `User ${user.first_name} status updated`,
+            message: `User ${user.first_name} account status updated to ${user.is_active ? 'Active' : 'Disabled'}`,
             user: {
                 id: String(user.id),
                 full_name: user.first_name,
                 email: user.email,
-                is_active: is_active ?? true
+                is_active: user.is_active
             }
         });
 
