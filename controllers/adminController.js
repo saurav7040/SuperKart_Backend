@@ -184,7 +184,7 @@ const getAdminDashboard = async (req, res) => {
 };
 
 // ======================================
-// 4. GET PAGINATED REAL USERS LIST (WITH COMPLETE PROFILE FIELDS)
+// 4. GET PAGINATED REAL USERS LIST (WITH COMPLETE PROFILE, PINCODE & REFERRAL FIELDS)
 // GET /api/v1/admin/users
 // ======================================
 const getAdminUsers = async (req, res) => {
@@ -194,17 +194,24 @@ const getAdminUsers = async (req, res) => {
         const search = (req.query.search || '').trim();
         const offset = (page - 1) * limit;
 
-        let query = "SELECT id, first_name, last_name, gender, date_of_birth, age, email, phone, city_village, state, pincode, house_no, street_landmark, referral_code, coins, profile_pic_url, created_at FROM users";
-        let countQuery = "SELECT COUNT(*) FROM users";
+        let query = `
+            SELECT u.id, u.first_name, u.last_name, u.gender, u.date_of_birth, u.age, u.email, u.phone,
+                   u.city_village, u.state, u.pincode, u.house_no, u.street_landmark, u.referral_code,
+                   u.coins, u.profile_pic_url, u.referred_by_id, u.is_referral_rewarded, u.created_at,
+                   ref.first_name AS referrer_first_name, ref.last_name AS referrer_last_name, ref.referral_code AS referrer_code
+            FROM users u
+            LEFT JOIN users ref ON u.referred_by_id = ref.id
+        `;
+        let countQuery = "SELECT COUNT(*) FROM users u";
         let params = [];
 
         if (search) {
-            query += " WHERE LOWER(first_name) LIKE $1 OR LOWER(last_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1 OR LOWER(city_village) LIKE $1";
-            countQuery += " WHERE LOWER(first_name) LIKE $1 OR LOWER(last_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1 OR LOWER(city_village) LIKE $1";
+            query += " WHERE LOWER(u.first_name) LIKE $1 OR LOWER(u.last_name) LIKE $1 OR LOWER(u.email) LIKE $1 OR u.phone LIKE $1 OR LOWER(u.referral_code) LIKE $1 OR LOWER(u.city_village) LIKE $1 OR u.pincode LIKE $1";
+            countQuery += " WHERE LOWER(u.first_name) LIKE $1 OR LOWER(u.last_name) LIKE $1 OR LOWER(u.email) LIKE $1 OR u.phone LIKE $1 OR LOWER(u.referral_code) LIKE $1 OR LOWER(u.city_village) LIKE $1 OR u.pincode LIKE $1";
             params.push(`%${search.toLowerCase()}%`);
         }
 
-        query += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        query += ` ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
         const result = await pool.query(query, params);
         const countRes = await pool.query(countQuery, params);
@@ -218,9 +225,12 @@ const getAdminUsers = async (req, res) => {
             age: user.age || 18,
             email: user.email || 'N/A',
             phone: user.phone || 'N/A',
-            location: user.city_village && user.state ? `${user.city_village}, ${user.state}` : 'N/A',
+            pincode: user.pincode || 'N/A',
+            location: user.city_village && user.state ? `${user.city_village}, ${user.state} (${user.pincode || ''})` : 'N/A',
             address: user.house_no && user.street_landmark ? `${user.house_no}, ${user.street_landmark}, ${user.city_village}, ${user.state} - ${user.pincode}` : 'N/A',
             referral_code: user.referral_code || `REF-${user.id}`,
+            referred_by: user.referrer_first_name ? `${user.referrer_first_name} (${user.referrer_code})` : 'Direct Sign-Up',
+            is_referral_rewarded: user.referred_by_id ? (user.is_referral_rewarded ? 'Yes (₹200 Paid)' : 'Pending Conversion') : 'N/A',
             coins: parseInt(user.coins || 0),
             profile_pic_url: user.profile_pic_url,
             is_active: true,
