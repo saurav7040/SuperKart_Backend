@@ -78,13 +78,13 @@ const dispatchWhatsAppTicket = async (req, res) => {
             [userId, category, sanitizedQuery, whatsappNumber, 'OPEN']
         );
 
-        // Build Pre-formatted WhatsApp Message
+        // Build Pre-formatted WhatsApp Message (Safe from URL anchor truncation!)
         let messageText = `Hi SuperKart Support Team! 👋\n\n`;
-        messageText += `*Name:* ${userName}\n`;
-        messageText += `*User ID:* #${userId}\n`;
-        if (userContact) messageText += `*Contact:* ${userContact}\n`;
-        messageText += `*Category:* ${category}\n`;
-        if (sanitizedQuery) messageText += `*Query Details:* ${sanitizedQuery}\n`;
+        messageText += `Name: ${userName}\n`;
+        messageText += `User ID: ID-${userId}\n`;
+        if (userContact) messageText += `Contact: ${userContact}\n`;
+        messageText += `Category: ${category}\n`;
+        if (sanitizedQuery) messageText += `Query Details: ${sanitizedQuery}\n`;
         messageText += `\nPlease assist me with my request. Thank you!`;
 
         const encodedMessage = encodeURIComponent(messageText);
