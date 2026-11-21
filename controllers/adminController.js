@@ -346,11 +346,13 @@ const createAdminProduct = async (req, res) => {
         const winPrice = parseFloat(winOfferPrice || 100.0);
         const img = imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a';
 
+        const colors = '#000000,#FFFFFF,#1E3A8A';
+
         const result = await pool.query(
-            `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url, available_colors)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING *`,
-            [productId, pTitle, pSub, pCategory, regPrice, winPrice, img]
+            [productId, pTitle, pSub, pCategory, regPrice, winPrice, img, colors]
         );
 
         // Also seed active contest drop in contests table!
