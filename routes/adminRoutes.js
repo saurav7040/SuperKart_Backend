@@ -15,6 +15,8 @@ router.get("/users", adminController.getAdminUsers);
 router.patch("/users/:id/status", adminController.updateUserStatus);
 router.get("/products", adminController.getAdminProducts);
 router.post("/products", adminController.createAdminProduct);
+router.put("/products/:id", adminController.updateAdminProduct);
+router.delete("/products/:id", adminController.deleteAdminProduct);
 router.patch("/products/:id/status", adminController.updateProductStatus);
 router.get("/orders", adminController.getAdminOrders);
 router.get("/referrals", adminController.getAdminReferrals);

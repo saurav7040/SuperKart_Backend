@@ -409,7 +409,8 @@ const createAdminProduct = async (req, res) => {
         const catInput = (category || 'shoes').trim().toLowerCase();
         const isPhoneInput = catInput.includes('phone') || catInput.includes('mobile') || catInput.includes('smartphone');
         const pCategory = isPhoneInput ? 'smartphones' : 'shoes';
-        const productId = (isPhoneInput ? "phone_" : "shoe_") + Date.now();
+        const shortNum = crypto.randomInt(100, 999);
+        const productId = (isPhoneInput ? "phone_" : "shoe_") + shortNum;
 
         const pTitle = title.trim();
         const pSub = subtitle ? subtitle.trim() : 'LIMITED EDITION';
@@ -474,6 +475,114 @@ const createAdminProduct = async (req, res) => {
     } catch (error) {
         console.error("Create Admin Product Error:", error.message);
         return res.status(500).json({ success: false, message: error.message || "Failed to create product" });
+    }
+};
+
+// ======================================
+// 8. UPDATE EXISTING PRODUCT & CONTEST DROP
+// PUT /api/v1/admin/products/:id
+// ======================================
+const updateAdminProduct = async (req, res) => {
+    try {
+        const productId = req.params.id;
+        const { title, subtitle, category, regularPrice, winOfferPrice, imageUrl, imagesList, availableColors } = req.body;
+
+        const pRes = await pool.query("SELECT * FROM products WHERE id = $1", [productId]);
+        if (pRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Product not found" });
+        }
+
+        const current = pRes.rows[0];
+
+        const pTitle = title ? title.trim() : current.title;
+        const pSub = subtitle ? subtitle.trim() : current.subtitle;
+        const pCategory = category ? category.trim().toLowerCase() : current.category;
+        const regPrice = regularPrice ? parseFloat(regularPrice) : parseFloat(current.regular_price);
+        const winPrice = winOfferPrice ? parseFloat(winOfferPrice) : parseFloat(current.win_offer_price);
+        const img = imageUrl ? imageUrl.trim() : current.image_url;
+
+        let finalImages = [img];
+        if (Array.isArray(imagesList) && imagesList.length > 0) {
+            finalImages = imagesList.filter(url => typeof url === 'string' && url.trim().length > 0);
+        } else if (typeof imagesList === 'string' && imagesList.trim().length > 0) {
+            finalImages = imagesList.split(/[\n,]+/).map(url => url.trim()).filter(url => url.length > 0);
+        }
+
+        let finalColors = ['#000000', '#FFFFFF', '#1E3A8A'];
+        if (Array.isArray(availableColors) && availableColors.length > 0) {
+            finalColors = availableColors.filter(c => typeof c === 'string' && c.trim().length > 0);
+        } else if (typeof availableColors === 'string' && availableColors.trim().length > 0) {
+            finalColors = availableColors.split(/[\n,]+/).map(c => c.trim()).filter(c => c.length > 0);
+        }
+
+        const colorsJson = JSON.stringify(finalColors);
+        const imagesJson = JSON.stringify(finalImages);
+
+        const result = await pool.query(
+            `UPDATE products
+             SET title = $1, subtitle = $2, category = $3, regular_price = $4, win_offer_price = $5, image_url = $6, available_colors = $7, images_list = $8
+             WHERE id = $9
+             RETURNING *`,
+            [pTitle, pSub, pCategory, regPrice, winPrice, img, colorsJson, imagesJson, productId]
+        );
+
+        await pool.query(
+            `UPDATE contests
+             SET title = $1, subtitle = $2, entry_fee = $3, voucher_amount = $3
+             WHERE product_id = $4`,
+            [pTitle.toUpperCase(), pSub.toUpperCase(), winPrice, productId]
+        );
+
+        const p = result.rows[0];
+
+        return res.status(200).json({
+            success: true,
+            message: "Product and contest updated successfully!",
+            product: {
+                id: String(p.id),
+                title: p.title,
+                subtitle: p.subtitle,
+                name: `${p.title} | ${p.subtitle}`,
+                category: p.category,
+                price: parseFloat(p.regular_price),
+                winOfferPrice: parseFloat(p.win_offer_price),
+                image_url: p.image_url,
+                images_list: finalImages,
+                available_colors: finalColors,
+                status: 'Active'
+            }
+        });
+
+    } catch (error) {
+        console.error("Update Admin Product Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to update product" });
+    }
+};
+
+// ======================================
+// 9. DELETE PRODUCT & LINKED CONTEST
+// DELETE /api/v1/admin/products/:id
+// ======================================
+const deleteAdminProduct = async (req, res) => {
+    try {
+        const productId = req.params.id;
+
+        await pool.query("DELETE FROM user_contest_entries WHERE contest_id IN (SELECT id FROM contests WHERE product_id = $1)", [productId]);
+        await pool.query("DELETE FROM contests WHERE product_id = $1", [productId]);
+        const result = await pool.query("DELETE FROM products WHERE id = $1 RETURNING *", [productId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Product not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Product ${productId} and linked contest deleted successfully!`
+        });
+
+    } catch (error) {
+        console.error("Delete Admin Product Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to delete product" });
     }
 };
 
@@ -633,6 +742,8 @@ module.exports = {
     updateUserStatus,
     getAdminProducts,
     createAdminProduct,
+    updateAdminProduct,
+    deleteAdminProduct,
     updateProductStatus,
     getAdminOrders,
     getAdminReferrals
