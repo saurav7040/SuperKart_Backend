@@ -463,7 +463,6 @@ const createAdminProduct = async (req, res) => {
                 status: 'Active'
             }
         });
-        });
 
     } catch (error) {
         console.error("Create Admin Product Error:", error.message);
