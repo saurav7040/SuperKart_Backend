@@ -302,19 +302,35 @@ const getAdminProducts = async (req, res) => {
         const page = parseInt(req.query.page || '1');
         const limit = parseInt(req.query.limit || '20');
         const search = (req.query.search || '').trim();
+        const category = (req.query.category || '').trim().toLowerCase();
         const offset = (page - 1) * limit;
 
-        let query = "SELECT * FROM products";
-        let countQuery = "SELECT COUNT(*) FROM products";
+        let query = `
+            SELECT p.*, c.id AS contest_id, c.max_winners, c.joined_count, c.status AS contest_status, c.entry_start_time, c.entry_end_time
+            FROM products p
+            LEFT JOIN contests c ON p.id = c.product_id
+        `;
+        let countQuery = "SELECT COUNT(*) FROM products p";
+        let whereClauses = [];
         let params = [];
 
         if (search) {
-            query += " WHERE LOWER(title) LIKE $1 OR LOWER(subtitle) LIKE $1 OR LOWER(category) LIKE $1";
-            countQuery += " WHERE LOWER(title) LIKE $1 OR LOWER(subtitle) LIKE $1 OR LOWER(category) LIKE $1";
+            whereClauses.push(`(LOWER(p.title) LIKE $${params.length + 1} OR LOWER(p.subtitle) LIKE $${params.length + 1} OR LOWER(p.category) LIKE $${params.length + 1})`);
             params.push(`%${search.toLowerCase()}%`);
         }
 
-        query += ` ORDER BY id ASC LIMIT ${limit} OFFSET ${offset}`;
+        if (category && category !== 'all') {
+            const catMap = (category === 'shoes' || category === 'shoe') ? 'shoes' : 'smartphones';
+            whereClauses.push(`LOWER(p.category) = $${params.length + 1}`);
+            params.push(catMap);
+        }
+
+        if (whereClauses.length > 0) {
+            query += " WHERE " + whereClauses.join(" AND ");
+            countQuery += " WHERE " + whereClauses.join(" AND ");
+        }
+
+        query += ` ORDER BY p.id ASC LIMIT ${limit} OFFSET ${offset}`;
 
         const result = await pool.query(query, params);
         const countRes = await pool.query(countQuery, params);
@@ -322,13 +338,18 @@ const getAdminProducts = async (req, res) => {
 
         const formattedProducts = result.rows.map(p => ({
             id: String(p.id),
+            title: p.title,
+            subtitle: p.subtitle || 'LIMITED EDITION',
             name: `${p.title} | ${p.subtitle || ''}`.trim(),
-            category: (p.category || 'Shoes').charAt(0).toUpperCase() + (p.category || 'Shoes').slice(1),
+            category: (p.category || 'shoes').toLowerCase() === 'smartphones' ? 'Phones' : 'Shoes',
             brand: 'SuperKart',
             price: parseFloat(p.regular_price || 0),
             winOfferPrice: parseFloat(p.win_offer_price || 100),
-            stock: 50,
             image_url: p.image_url,
+            contest_id: p.contest_id || `cnt_${p.id}`,
+            max_winners: parseInt(p.max_winners || 5),
+            joined_count: parseInt(p.joined_count || 0),
+            contest_status: p.contest_status || 'LIVE_REGISTRATION',
             status: 'Active'
         }));
 
