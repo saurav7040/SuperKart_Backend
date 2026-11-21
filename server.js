@@ -16,6 +16,7 @@ const locationRoutes = require("./routes/locationRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const contestRoutes = require("./routes/contestRoutes");
 const supportRoutes = require("./routes/supportRoutes");
+const aboutRoutes = require("./routes/aboutRoutes");
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use("/api/v1/location", locationRoutes);
 app.use("/api/v1/orders", orderRoutes);
 app.use("/api/v1/contests", contestRoutes);
 app.use("/api/v1/support", supportRoutes);
+app.use("/api/v1/about", aboutRoutes);
 
 // Global Express & Multer Error Handler
 app.use((err, req, res, next) => {
