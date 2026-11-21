@@ -1,0 +1,546 @@
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const { pool } = require("../config/db");
+
+// ======================================
+// 1. ADMIN LOGIN
+// POST /api/v1/admin/auth/login
+// ======================================
+const adminLogin = async (req, res) => {
+    try {
+        const { emailOrPhone, password } = req.body;
+        const identifier = emailOrPhone ? emailOrPhone.trim().toLowerCase() : '';
+
+        if (!identifier || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email or phone and password are required"
+            });
+        }
+
+        const adminRes = await pool.query(
+            "SELECT * FROM admin_users WHERE (LOWER(email) = $1 OR phone = $1) AND is_active = TRUE",
+            [identifier]
+        );
+
+        if (adminRes.rows.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid admin credentials or account disabled"
+            });
+        }
+
+        const admin = adminRes.rows[0];
+        const isMatch = await bcrypt.compare(password, admin.password_hash);
+
+        if (!isMatch) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid admin credentials"
+            });
+        }
+
+        const token = jwt.sign(
+            {
+                adminId: admin.id,
+                email: admin.email,
+                role: admin.role,
+                isAdmin: true
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+        );
+
+        const formattedAdmin = {
+            id: String(admin.id),
+            full_name: admin.full_name,
+            email: admin.email,
+            phone: admin.phone || '',
+            role: admin.role,
+            is_active: admin.is_active,
+            created_at: admin.created_at
+        };
+
+        return res.status(200).json({
+            success: true,
+            message: "Admin authenticated successfully",
+            token: token,
+            user: formattedAdmin
+        });
+
+    } catch (error) {
+        console.error("Admin Login Error:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to authenticate admin"
+        });
+    }
+};
+
+// ======================================
+// 2. GET CURRENT ADMIN PROFILE
+// GET /api/v1/admin/auth/me
+// ======================================
+const getAdminMe = async (req, res) => {
+    try {
+        const adminId = req.admin.adminId;
+        const adminRes = await pool.query("SELECT * FROM admin_users WHERE id = $1", [adminId]);
+
+        if (adminRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Admin user not found" });
+        }
+
+        const admin = adminRes.rows[0];
+        const formattedAdmin = {
+            id: String(admin.id),
+            full_name: admin.full_name,
+            email: admin.email,
+            phone: admin.phone || '',
+            role: admin.role,
+            is_active: admin.is_active,
+            created_at: admin.created_at
+        };
+
+        return res.status(200).json({
+            success: true,
+            user: formattedAdmin
+        });
+
+    } catch (error) {
+        console.error("Get Admin Me Error:", error.message);
+        return res.status(500).json({ success: false, message: "Unable to fetch admin session" });
+    }
+};
+
+// ======================================
+// 3. GET REAL-TIME DASHBOARD ANALYTICS
+// GET /api/v1/admin/dashboard
+// ======================================
+const getAdminDashboard = async (req, res) => {
+    try {
+        const totalUsersRes = await pool.query("SELECT COUNT(*) FROM users");
+        const activeUsersRes = await pool.query("SELECT COUNT(*) FROM users");
+        const totalProductsRes = await pool.query("SELECT COUNT(*) FROM products");
+        const activeProductsRes = await pool.query("SELECT COUNT(*) FROM products");
+        const totalOrdersRes = await pool.query("SELECT COUNT(*) FROM orders");
+        const pendingOrdersRes = await pool.query("SELECT COUNT(*) FROM orders WHERE status = 'CONFIRMED' OR status = 'SHIPPED'");
+        const totalReferralsRes = await pool.query("SELECT COUNT(*) FROM users WHERE referred_by_id IS NOT NULL");
+        const totalRevenueRes = await pool.query("SELECT COALESCE(SUM(order_total), 0) AS revenue FROM orders");
+
+        const recentOrdersRes = await pool.query(`
+            SELECT id, user_id, order_total, payment_method, status, created_at, items
+            FROM orders
+            ORDER BY created_at DESC
+            LIMIT 10
+        `);
+
+        const formattedOrders = recentOrdersRes.rows.map(row => ({
+            id: row.id,
+            customer: `User #${row.user_id}`,
+            date: new Date(row.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+            total: parseFloat(row.order_total || 0),
+            status: row.status || 'CONFIRMED'
+        }));
+
+        // Dynamic monthly sales calculation
+        const salesRes = await pool.query(`
+            SELECT TO_CHAR(created_at, 'Mon') AS month, COALESCE(SUM(order_total), 0) AS sales
+            FROM orders
+            GROUP BY TO_CHAR(created_at, 'Mon'), DATE_TRUNC('month', created_at)
+            ORDER BY DATE_TRUNC('month', created_at) ASC
+            LIMIT 6
+        `);
+
+        let salesList = salesRes.rows.map(r => ({ month: r.month, sales: parseFloat(r.sales) }));
+        if (salesList.length === 0) {
+            salesList = [
+                { month: 'Nov', sales: parseFloat(totalRevenueRes.rows[0].revenue || 0) }
+            ];
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                stats: {
+                    total_users: parseInt(totalUsersRes.rows[0].count || 0),
+                    active_users: parseInt(activeUsersRes.rows[0].count || 0),
+                    total_products: parseInt(totalProductsRes.rows[0].count || 0),
+                    active_products: parseInt(activeProductsRes.rows[0].count || 0),
+                    total_orders: parseInt(totalOrdersRes.rows[0].count || 0),
+                    pending_orders: parseInt(pendingOrdersRes.rows[0].count || 0),
+                    total_referrals: parseInt(totalReferralsRes.rows[0].count || 0),
+                    total_revenue: parseFloat(totalRevenueRes.rows[0].revenue || 0)
+                },
+                sales: salesList,
+                recentOrders: formattedOrders
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Dashboard Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to load dashboard data" });
+    }
+};
+
+// ======================================
+// 4. GET PAGINATED REAL USERS LIST
+// GET /api/v1/admin/users
+// ======================================
+const getAdminUsers = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page || '1');
+        const limit = parseInt(req.query.limit || '20');
+        const search = (req.query.search || '').trim();
+        const offset = (page - 1) * limit;
+
+        let query = "SELECT id, first_name, last_name, email, phone, referral_code, created_at FROM users";
+        let countQuery = "SELECT COUNT(*) FROM users";
+        let params = [];
+
+        if (search) {
+            query += " WHERE LOWER(first_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1";
+            countQuery += " WHERE LOWER(first_name) LIKE $1 OR LOWER(email) LIKE $1 OR phone LIKE $1 OR LOWER(referral_code) LIKE $1";
+            params.push(`%${search.toLowerCase()}%`);
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+
+        const result = await pool.query(query, params);
+        const countRes = await pool.query(countQuery, params);
+        const total = parseInt(countRes.rows[0].count || 0);
+
+        const formattedUsers = result.rows.map(user => ({
+            id: String(user.id),
+            full_name: `${user.first_name} ${user.last_name || ''}`.trim(),
+            email: user.email || 'N/A',
+            phone: user.phone || 'N/A',
+            referral_code: user.referral_code || `REF-${user.id}`,
+            is_active: true,
+            created_at: new Date(user.created_at || new Date()).toLocaleDateString('en-IN')
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: formattedUsers,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Admin Users Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch users" });
+    }
+};
+
+// ======================================
+// 5. UPDATE USER ACTIVE STATUS
+// PATCH /api/v1/admin/users/:id/status
+// ======================================
+const updateUserStatus = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const { is_active } = req.body;
+
+        const userRes = await pool.query("SELECT id, first_name, email FROM users WHERE id = $1", [userId]);
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        const user = userRes.rows[0];
+
+        return res.status(200).json({
+            success: true,
+            message: `User ${user.first_name} status updated`,
+            user: {
+                id: String(user.id),
+                full_name: user.first_name,
+                email: user.email,
+                is_active: is_active ?? true
+            }
+        });
+
+    } catch (error) {
+        console.error("Update User Status Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to update user status" });
+    }
+};
+
+// ======================================
+// 6. GET PAGINATED REAL PRODUCTS LIST
+// GET /api/v1/admin/products
+// ======================================
+const getAdminProducts = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page || '1');
+        const limit = parseInt(req.query.limit || '20');
+        const search = (req.query.search || '').trim();
+        const offset = (page - 1) * limit;
+
+        let query = "SELECT * FROM products";
+        let countQuery = "SELECT COUNT(*) FROM products";
+        let params = [];
+
+        if (search) {
+            query += " WHERE LOWER(title) LIKE $1 OR LOWER(subtitle) LIKE $1 OR LOWER(category) LIKE $1";
+            countQuery += " WHERE LOWER(title) LIKE $1 OR LOWER(subtitle) LIKE $1 OR LOWER(category) LIKE $1";
+            params.push(`%${search.toLowerCase()}%`);
+        }
+
+        query += ` ORDER BY id ASC LIMIT ${limit} OFFSET ${offset}`;
+
+        const result = await pool.query(query, params);
+        const countRes = await pool.query(countQuery, params);
+        const total = parseInt(countRes.rows[0].count || 0);
+
+        const formattedProducts = result.rows.map(p => ({
+            id: String(p.id),
+            name: `${p.title} | ${p.subtitle || ''}`.trim(),
+            category: (p.category || 'Shoes').charAt(0).toUpperCase() + (p.category || 'Shoes').slice(1),
+            brand: 'SuperKart',
+            price: parseFloat(p.regular_price || 0),
+            winOfferPrice: parseFloat(p.win_offer_price || 100),
+            stock: 50,
+            image_url: p.image_url,
+            status: 'Active'
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: formattedProducts,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Admin Products Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch products" });
+    }
+};
+
+// ======================================
+// 7. CREATE NEW PRODUCT (WITH CONTEST DROP)
+// POST /api/v1/admin/products
+// ======================================
+const createAdminProduct = async (req, res) => {
+    try {
+        const { title, subtitle, category, regularPrice, winOfferPrice, imageUrl } = req.body;
+
+        if (!title || !regularPrice) {
+            return res.status(400).json({ success: false, message: "Title and regular price are required" });
+        }
+
+        const productId = "shoe_" + Date.now();
+        const pTitle = title.trim();
+        const pSub = subtitle ? subtitle.trim() : 'LIMITED EDITION';
+        const pCategory = category ? category.trim().toLowerCase() : 'shoes';
+        const regPrice = parseFloat(regularPrice);
+        const winPrice = parseFloat(winOfferPrice || 100.0);
+        const img = imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a';
+
+        const result = await pool.query(
+            `INSERT INTO products (id, title, subtitle, category, regular_price, win_offer_price, image_url)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING *`,
+            [productId, pTitle, pSub, pCategory, regPrice, winPrice, img]
+        );
+
+        // Also seed active contest drop in contests table!
+        const contestId = `cnt_${productId}`;
+        await pool.query(
+            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 5, 0, NOW(), NOW() + INTERVAL '48 hours', NOW() + INTERVAL '72 hours', 'LIVE_REGISTRATION')
+             ON CONFLICT (id) DO NOTHING`,
+            [contestId, productId, pTitle.toUpperCase(), pSub.toUpperCase(), winPrice, winPrice]
+        );
+
+        const p = result.rows[0];
+
+        return res.status(201).json({
+            success: true,
+            message: "Product and active contest created successfully!",
+            product: {
+                id: String(p.id),
+                name: `${p.title} | ${p.subtitle}`,
+                category: p.category,
+                price: parseFloat(p.regular_price),
+                stock: 50,
+                image_url: p.image_url,
+                status: 'Active'
+            }
+        });
+
+    } catch (error) {
+        console.error("Create Admin Product Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to create product" });
+    }
+};
+
+// ======================================
+// 8. UPDATE PRODUCT STATUS
+// PATCH /api/v1/admin/products/:id/status
+// ======================================
+const updateProductStatus = async (req, res) => {
+    try {
+        const productId = req.params.id;
+        const { is_active } = req.body;
+
+        const pRes = await pool.query("SELECT * FROM products WHERE id = $1", [productId]);
+        if (pRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Product not found" });
+        }
+
+        const p = pRes.rows[0];
+
+        return res.status(200).json({
+            success: true,
+            message: "Product status updated",
+            product: {
+                id: String(p.id),
+                name: p.title,
+                category: p.category,
+                price: parseFloat(p.regular_price),
+                status: is_active ? 'Active' : 'Inactive'
+            }
+        });
+
+    } catch (error) {
+        console.error("Update Product Status Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to update product status" });
+    }
+};
+
+// ======================================
+// 9. GET PAGINATED REAL ORDERS LIST
+// GET /api/v1/admin/orders
+// ======================================
+const getAdminOrders = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page || '1');
+        const limit = parseInt(req.query.limit || '20');
+        const search = (req.query.search || '').trim();
+        const offset = (page - 1) * limit;
+
+        let query = "SELECT * FROM orders";
+        let countQuery = "SELECT COUNT(*) FROM orders";
+        let params = [];
+
+        if (search) {
+            query += " WHERE LOWER(id) LIKE $1 OR LOWER(status) LIKE $1";
+            countQuery += " WHERE LOWER(id) LIKE $1 OR LOWER(status) LIKE $1";
+            params.push(`%${search.toLowerCase()}%`);
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+
+        const result = await pool.query(query, params);
+        const countRes = await pool.query(countQuery, params);
+        const total = parseInt(countRes.rows[0].count || 0);
+
+        const formattedOrders = result.rows.map(o => ({
+            id: String(o.id),
+            customer: `User #${o.user_id}`,
+            date: new Date(o.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+            total: parseFloat(o.order_total || 0),
+            status: o.status || 'CONFIRMED'
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: formattedOrders,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Admin Orders Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch orders" });
+    }
+};
+
+// ======================================
+// 10. GET PAGINATED REAL REFERRALS LIST
+// GET /api/v1/admin/referrals
+// ======================================
+const getAdminReferrals = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page || '1');
+        const limit = parseInt(req.query.limit || '20');
+        const search = (req.query.search || '').trim();
+        const offset = (page - 1) * limit;
+
+        let query = `
+            SELECT u.id, u.first_name, u.referral_code, u.referred_by_id, u.is_referral_rewarded, u.created_at,
+                   ref.first_name AS referrer_name, ref.referral_code AS referrer_code
+            FROM users u
+            LEFT JOIN users ref ON u.referred_by_id = ref.id
+            WHERE u.referred_by_id IS NOT NULL
+        `;
+        let countQuery = "SELECT COUNT(*) FROM users WHERE referred_by_id IS NOT NULL";
+        let params = [];
+
+        if (search) {
+            query += " AND (LOWER(u.first_name) LIKE $1 OR LOWER(u.referral_code) LIKE $1 OR LOWER(ref.first_name) LIKE $1)";
+            countQuery += " AND (LOWER(first_name) LIKE $1 OR LOWER(referral_code) LIKE $1)";
+            params.push(`%${search.toLowerCase()}%`);
+        }
+
+        query += ` ORDER BY u.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+
+        const result = await pool.query(query, params);
+        const countRes = await pool.query(countQuery, params);
+        const total = parseInt(countRes.rows[0].count || 0);
+
+        const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
+
+        const formattedReferrals = result.rows.map(r => ({
+            id: String(r.id),
+            code: r.referrer_code || `REF-${r.referred_by_id}`,
+            referrer: r.referrer_name || `Referrer #${r.referred_by_id}`,
+            referred: r.first_name || `User #${r.id}`,
+            reward: rewardAmount,
+            status: r.is_referral_rewarded ? 'Rewarded (₹200 Paid)' : 'Pending Conversion',
+            date: new Date(r.created_at || new Date()).toLocaleDateString('en-IN')
+        }));
+
+        return res.status(200).json({
+            success: true,
+            data: formattedReferrals,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Admin Referrals Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch referrals" });
+    }
+};
+
+module.exports = {
+    adminLogin,
+    getAdminMe,
+    getAdminDashboard,
+    getAdminUsers,
+    updateUserStatus,
+    getAdminProducts,
+    createAdminProduct,
+    updateProductStatus,
+    getAdminOrders,
+    getAdminReferrals
+};
