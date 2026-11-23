@@ -17,8 +17,8 @@ const processReferralReward = async (userId) => {
             const rewardCoins = Math.round(rewardAmount * 100);
 
             await pool.query(
-                "UPDATE users SET coins = coins + $1 WHERE id = $2",
-                [rewardCoins, user.referred_by_id]
+                "UPDATE users SET cashback_earned = COALESCE(cashback_earned, 0) + $1 WHERE id = $2",
+                [rewardAmount, user.referred_by_id]
             );
 
             await pool.query(
@@ -584,17 +584,31 @@ const claimPrize = async (req, res) => {
             [orderId, contestId, userId]
         );
 
+        const productRes = await client.query("SELECT * FROM products WHERE id = $1", [productId]);
+        const prod = productRes.rows[0];
+
+        const itemObj = {
+            productId: productId,
+            title: prod ? prod.title : (contest ? contest.title : 'Grand Prize Item'),
+            subtitle: prod ? (prod.subtitle || 'WINNER DROP') : (contest ? contest.subtitle : 'WINNER DROP'),
+            imageUrl: prod ? prod.image_url : 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+            selectedSize: 'IND-8',
+            quantity: 1,
+            price: 0.00,
+            isGrandPrize: true
+        };
+
         await client.query(
             `INSERT INTO orders (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [
                 orderId,
                 userId,
-                JSON.stringify([{ productId: productId, quantity: 1, isGrandPrize: true }]),
+                JSON.stringify([itemObj]),
                 JSON.stringify(deliveryAddress),
-                'CONTEST_ENTRY_PAID_FREE_DISPATCH',
+                'CONTEST_WINNER_FREE_DISPATCH',
                 0.00,
-                0.00,
+                parseFloat(prod ? prod.regular_price : 3599.00),
                 'CONFIRMED'
             ]
         );
