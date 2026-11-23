@@ -16,7 +16,7 @@ const getDynamicDeliveryDate = (createdAt) => {
     return `Delivered by ${dayName}, ${dayNum}th ${monthName}`;
 };
 
-// Helper: Process Referral Reward when referred friend converts (Wins grand prize or purchases product)
+// Helper: Process Referral Reward when referred friend converts
 const processReferralReward = async (userId) => {
     try {
         const userRes = await pool.query(
@@ -27,11 +27,10 @@ const processReferralReward = async (userId) => {
 
         if (user && user.referred_by_id && !user.is_referral_rewarded) {
             const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
-            const rewardCoins = Math.round(rewardAmount * 100);
 
             await pool.query(
-                "UPDATE users SET coins = coins + $1 WHERE id = $2",
-                [rewardCoins, user.referred_by_id]
+                "UPDATE users SET cashback_earned = COALESCE(cashback_earned, 0) + $1 WHERE id = $2",
+                [rewardAmount, user.referred_by_id]
             );
 
             await pool.query(
@@ -45,7 +44,7 @@ const processReferralReward = async (userId) => {
                 [
                     user.referred_by_id,
                     `🎉 ₹${Math.round(rewardAmount)} Referral Cashback Credited!`,
-                    `You earned ₹${Math.round(rewardAmount)} cashback because your referred friend purchased a product!`,
+                    `You earned ₹${Math.round(rewardAmount)} cashback because your referred friend completed a purchase!`,
                     "reward",
                     "Just now"
                 ]
@@ -70,17 +69,8 @@ const placeOrder = async (req, res) => {
             deliveryAddress,
             paymentMethod,
             orderTotal,
-            discountAmount,
-            superCoinsUsed
+            discountAmount
         } = req.body;
-
-        if (superCoinsUsed && parseInt(superCoinsUsed) > 0) {
-            const coinsToDeduct = parseInt(superCoinsUsed);
-            await client.query(
-                "UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2",
-                [coinsToDeduct, userId]
-            );
-        }
 
         if (!items || !deliveryAddress || !paymentMethod || !orderTotal) {
             return res.status(400).json({
@@ -89,13 +79,11 @@ const placeOrder = async (req, res) => {
             });
         }
 
-        // Generate clean Order ID e.g. SK-849201
         const orderId = "SK-" + crypto.randomInt(100000, 999999).toString();
         const estimatedDelivery = getDynamicDeliveryDate(new Date());
 
         await client.query("BEGIN");
 
-        // Insert Order into PostgreSQL
         await client.query(
             `INSERT INTO orders
             (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
@@ -160,7 +148,7 @@ const placeOrder = async (req, res) => {
 };
 
 // ======================================
-// 2. GET MY ORDERS WITH LIVE 4-STEP TRACKING
+// 2. GET MY ORDERS WITH ENRICHED PRODUCT & LIVE 4-STEP TRACKING
 // GET /api/v1/orders/my-orders
 // ======================================
 const getMyOrders = async (req, res) => {
@@ -183,13 +171,21 @@ const getMyOrders = async (req, res) => {
 
             let itemsList = [];
             try {
-                itemsList = typeof row.items === 'string' ? JSON.parse(row.items) : row.items;
+                itemsList = typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []);
             } catch (_) {
                 itemsList = [];
             }
 
+            let deliveryAddr = {};
+            try {
+                deliveryAddr = typeof row.delivery_address === 'string' ? JSON.parse(row.delivery_address) : (row.delivery_address || {});
+            } catch (_) {
+                deliveryAddr = {};
+            }
+
             const item = itemsList.length > 0 ? itemsList[0] : {};
             const isGrandPrizeFree = item.isGrandPrize === true || parseFloat(row.order_total) === 0;
+            const defaultAwb = row.awb_tracking_number || `DEL-${crypto.randomInt(1000000, 9999999)}`;
 
             const trackingSteps = [
                 {
@@ -201,7 +197,7 @@ const getMyOrders = async (req, res) => {
                 {
                     step: 'SHIPPED',
                     title: 'Dispatched from Warehouse',
-                    date: currentStatus === 'SHIPPED' || currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED' ? 'In Transit' : 'Pending',
+                    date: currentStatus === 'SHIPPED' || currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED' ? `Dispatched via ${row.courier_name || 'Delhivery'} (${defaultAwb})` : 'Pending Dispatch',
                     isCompleted: currentStatus === 'SHIPPED' || currentStatus === 'OUT FOR DELIVERY' || currentStatus === 'DELIVERED'
                 },
                 {
@@ -221,13 +217,20 @@ const getMyOrders = async (req, res) => {
             return {
                 id: row.id,
                 orderTotal: parseFloat(row.order_total),
-                paymentMethod: row.payment_method,
+                discountAmount: parseFloat(row.discount_amount || 0),
+                paymentMethod: row.payment_method || 'UPI',
                 status: currentStatus,
+                awbTrackingNumber: defaultAwb,
+                courierName: row.courier_name || 'Delhivery',
                 createdAt: row.created_at,
                 isGrandPrizeFree: isGrandPrizeFree,
-                productTitle: item.title || 'Flash Contest Product',
-                productSubtitle: item.subtitle || 'WINNER EDITION',
+                productTitle: item.title || 'SuperKart Official Item',
+                productSubtitle: item.subtitle || 'LIMITED EDITION',
                 imageUrl: item.imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                selectedSize: item.selectedSize || 'IND-8',
+                quantity: item.quantity || 1,
+                regularPrice: parseFloat(item.price || row.order_total || 3599),
+                deliveryAddress: deliveryAddr,
                 trackingSteps: trackingSteps
             };
         });
@@ -248,12 +251,12 @@ const getMyOrders = async (req, res) => {
 };
 
 // ======================================
-// 3. ADMIN UPDATE ORDER STATUS
+// 3. ADMIN UPDATE ORDER STATUS & AWB TRACKING NUMBER
 // POST /api/v1/orders/admin/update-status
 // ======================================
 const updateOrderStatus = async (req, res) => {
     try {
-        const { orderId, status } = req.body;
+        const { orderId, status, awbTrackingNumber, courierName } = req.body;
 
         if (!orderId || !status) {
             return res.status(400).json({
@@ -272,9 +275,12 @@ const updateOrderStatus = async (req, res) => {
             });
         }
 
+        const awb = awbTrackingNumber ? awbTrackingNumber.trim() : `DEL-${crypto.randomInt(1000000, 9999999)}`;
+        const courier = courierName ? courierName.trim() : 'Delhivery';
+
         const result = await pool.query(
-            "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *",
-            [normalizedStatus, orderId]
+            "UPDATE orders SET status = $1, awb_tracking_number = $2, courier_name = $3 WHERE id = $4 RETURNING *",
+            [normalizedStatus, awb, courier, orderId]
         );
 
         if (result.rows.length === 0) {
@@ -292,7 +298,7 @@ const updateOrderStatus = async (req, res) => {
             [
                 order.user_id,
                 `📦 Order Status Update: ${normalizedStatus}`,
-                `Your order #${orderId} is now ${normalizedStatus.toLowerCase()}. Track live in My Orders.`,
+                `Your order #${orderId} is now ${normalizedStatus.toLowerCase()} via ${courier} (${awb}). Track live in My Orders.`,
                 "order",
                 "Just now"
             ]
