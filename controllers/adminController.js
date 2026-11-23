@@ -631,29 +631,87 @@ const getAdminOrders = async (req, res) => {
         const search = (req.query.search || '').trim();
         const offset = (page - 1) * limit;
 
-        let query = "SELECT * FROM orders";
-        let countQuery = "SELECT COUNT(*) FROM orders";
+        let query = `
+            SELECT o.*, u.first_name, u.last_name, u.email AS user_email, u.phone AS user_phone,
+                   u.house_no, u.street_landmark, u.city_village, u.state, u.pincode
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.id
+        `;
+        let countQuery = "SELECT COUNT(*) FROM orders o LEFT JOIN users u ON o.user_id = u.id";
         let params = [];
 
         if (search) {
-            query += " WHERE LOWER(id) LIKE $1 OR LOWER(status) LIKE $1";
-            countQuery += " WHERE LOWER(id) LIKE $1 OR LOWER(status) LIKE $1";
+            query += " WHERE LOWER(o.id) LIKE $1 OR LOWER(o.status) LIKE $1 OR LOWER(u.first_name) LIKE $1 OR u.phone LIKE $1";
+            countQuery += " WHERE LOWER(o.id) LIKE $1 OR LOWER(o.status) LIKE $1 OR LOWER(u.first_name) LIKE $1 OR u.phone LIKE $1";
             params.push(`%${search.toLowerCase()}%`);
         }
 
-        query += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        query += ` ORDER BY o.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
         const result = await pool.query(query, params);
         const countRes = await pool.query(countQuery, params);
         const total = parseInt(countRes.rows[0].count || 0);
 
-        const formattedOrders = result.rows.map(o => ({
-            id: String(o.id),
-            customer: `User #${o.user_id}`,
-            date: new Date(o.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-            total: parseFloat(o.order_total || 0),
-            status: o.status || 'CONFIRMED'
-        }));
+        const formattedOrders = result.rows.map(o => {
+            let itemsList = [];
+            try {
+                itemsList = typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []);
+            } catch (_) {
+                itemsList = [];
+            }
+
+            let deliveryAddr = {};
+            try {
+                deliveryAddr = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : (o.delivery_address || {});
+            } catch (_) {
+                deliveryAddr = {};
+            }
+
+            const item = itemsList.length > 0 ? itemsList[0] : {};
+            const isGrandPrizeFree = item.isGrandPrize === true || parseFloat(o.order_total || 0) === 0;
+
+            const fullName = deliveryAddr.fullName || `${o.first_name || 'Customer'} ${o.last_name || ''}`.trim();
+            const phone = deliveryAddr.phone || o.user_phone || 'N/A';
+
+            const house = deliveryAddr.houseNo || o.house_no || 'Flat 201';
+            const street = deliveryAddr.streetLandmark || o.street_landmark || 'Main Road';
+            const city = deliveryAddr.cityVillage || o.city_village || 'Georai';
+            const stateStr = deliveryAddr.state || o.state || 'Maharashtra';
+            const pin = deliveryAddr.pincode || o.pincode || '431127';
+
+            const fullAddress = `${house}, ${street}, ${city}, ${stateStr} - ${pin}`;
+
+            const orderTotalVal = parseFloat(o.order_total || 0);
+
+            return {
+                id: String(o.id),
+                orderTotal: isNaN(orderTotalVal) ? 0 : orderTotalVal,
+                discountAmount: parseFloat(o.discount_amount || 0),
+                paymentMethod: o.payment_method || 'UPI',
+                status: (o.status || 'CONFIRMED').toUpperCase(),
+                awbTrackingNumber: o.awb_tracking_number || `DEL-${o.id.replace('SK-', '')}`,
+                courierName: o.courier_name || 'Delhivery',
+                date: new Date(o.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+                isGrandPrizeFree: isGrandPrizeFree,
+                customerName: fullName,
+                customerPhone: phone,
+                productTitle: item.title || 'SuperKart Official Item',
+                productSubtitle: item.subtitle || 'LIMITED EDITION',
+                imageUrl: item.imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                selectedSize: item.selectedSize || 'IND-8',
+                quantity: item.quantity || 1,
+                deliveryAddress: {
+                    fullName: fullName,
+                    phone: phone,
+                    houseNo: house,
+                    streetLandmark: street,
+                    cityVillage: city,
+                    state: stateStr,
+                    pincode: pin,
+                    fullAddress: fullAddress
+                }
+            };
+        });
 
         return res.status(200).json({
             success: true,
