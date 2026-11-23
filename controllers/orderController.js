@@ -113,8 +113,11 @@ const placeOrder = async (req, res) => {
             ]
         );
 
-        // Clear user's cart in PostgreSQL user_cart table
-        await client.query("DELETE FROM user_cart WHERE user_id = $1", [userId]);
+        // Update any pending non-winner redemption entries for this user
+        await client.query(
+            "UPDATE user_contest_entries SET claim_type = 'BUY_REMAINING', claim_status = 'COMPLETED', order_id = $1 WHERE user_id = $2 AND is_scratched = TRUE AND claim_status = 'PENDING'",
+            [orderId, userId]
+        );
 
         // Insert Order Confirmation Notification
         await client.query(

@@ -388,7 +388,7 @@ const claimCashback = async (req, res) => {
         const returnAmount = parseFloat(entry.voucher_claimed_amount || 100.0);
 
         await pool.query(
-            "UPDATE user_contest_entries SET is_scratched = TRUE WHERE id = $1",
+            "UPDATE user_contest_entries SET is_scratched = TRUE, claim_type = 'CASHBACK', claim_status = 'COMPLETED' WHERE id = $1",
             [entry.id]
         );
 
@@ -580,6 +580,11 @@ const claimPrize = async (req, res) => {
         const orderId = "SK-WIN-" + crypto.randomInt(100000, 999999).toString();
 
         await client.query(
+            "UPDATE user_contest_entries SET is_scratched = TRUE, claim_type = 'PRIZE_WINNER', claim_status = 'COMPLETED', order_id = $1 WHERE contest_id = $2 AND user_id = $3",
+            [orderId, contestId, userId]
+        );
+
+        await client.query(
             `INSERT INTO orders (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [
@@ -648,31 +653,43 @@ const getContestHistory = async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT c.id, c.title, c.subtitle, c.entry_fee, c.voucher_amount,
-                    p.image_url, p.regular_price,
-                    e.is_winner, e.voucher_code, e.voucher_claimed_amount, e.created_at
+            `SELECT e.id AS entry_id, e.contest_id, e.entry_fee_paid, e.voucher_claimed_amount,
+                    e.is_scratchable, e.is_scratched, e.is_winner, e.voucher_code,
+                    e.claim_type, e.claim_status, e.order_id, e.created_at,
+                    c.title AS contest_title, c.subtitle AS contest_subtitle, c.entry_fee, c.voucher_amount, c.product_id,
+                    p.title AS product_title, p.subtitle AS product_subtitle, p.image_url, p.regular_price
              FROM user_contest_entries e
              JOIN contests c ON e.contest_id = c.id
              LEFT JOIN products p ON c.product_id = p.id
-             WHERE e.user_id = $1 AND e.is_scratched = TRUE
+             WHERE e.user_id = $1
              ORDER BY e.created_at DESC`,
             [userId]
         );
 
         const formattedHistory = result.rows.map(row => {
             const returnAmount = parseFloat(row.voucher_claimed_amount || row.voucher_amount || 100.0);
+            const isWin = row.is_winner || false;
+            const cType = row.claim_type || (isWin ? (row.order_id ? 'PRIZE_WINNER' : 'NONE') : 'NONE');
+            const cStatus = row.claim_status || (cType !== 'NONE' ? 'COMPLETED' : 'PENDING');
+
             return {
-                id: String(row.id),
-                shoeTitle: row.title,
-                shoeSubtitle: row.subtitle,
+                id: String(row.entry_id),
+                contestId: row.contest_id,
+                productId: row.product_id,
+                shoeTitle: row.product_title || row.contest_title,
+                shoeSubtitle: row.product_subtitle || row.contest_subtitle || 'LIMITED EDITION',
                 imageUrl: row.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
-                winOfferPrice: parseFloat(row.entry_fee),
+                winOfferPrice: parseFloat(row.entry_fee_paid || row.entry_fee || 100.0),
                 regularPrice: parseFloat(row.regular_price || 3599.0),
                 voucherAmount: returnAmount,
-                superCoinsAmount: Math.round(returnAmount * 100),
                 voucherCode: row.voucher_code || 'CASHBACK100',
-                isWinner: row.is_winner || false,
-                completedAt: 'Just now'
+                isWinner: isWin,
+                isScratchable: row.is_scratchable || false,
+                isScratched: row.is_scratched || false,
+                claimType: cType,
+                claimStatus: cStatus,
+                orderId: row.order_id,
+                completedAt: new Date(row.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
             };
         });
 
