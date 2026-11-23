@@ -1,7 +1,3 @@
-// ======================================
-// GET ABOUT APP INFO (DYNAMIC BACKEND CONFIGURATION)
-// GET /api/v1/about
-// ======================================
 const getAboutInfo = async (req, res) => {
     try {
         const host = req.get('host') || '10.215.23.105:5000';
@@ -35,7 +31,7 @@ const getAboutInfo = async (req, res) => {
                     },
                     {
                         step: "4. 🛡️ 0% Loss Guarantee for Non-Winners",
-                        description: "Non-winning participants lose nothing! Convert 100% of your deposit into Instant UPI Cashback, SuperCoins Wallet Credit (100 SuperCoins = ₹1), or buy the product at remaining balance."
+                        description: "Non-winning participants lose nothing! Receive 100% of your deposit back as Instant UPI Cashback or buy the product directly at remaining balance."
                     }
                 ],
                 developers: [

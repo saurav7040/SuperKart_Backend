@@ -197,7 +197,7 @@ const getAdminUsers = async (req, res) => {
         let query = `
             SELECT u.id, u.first_name, u.last_name, u.gender, u.date_of_birth, u.age, u.email, u.phone,
                    u.city_village, u.state, u.pincode, u.house_no, u.street_landmark, u.referral_code,
-                   u.coins, u.profile_pic_url, u.referred_by_id, u.is_referral_rewarded, u.created_at,
+                   u.cashback_earned, u.profile_pic_url, u.referred_by_id, u.is_referral_rewarded, u.created_at,
                    ref.first_name AS referrer_first_name, ref.last_name AS referrer_last_name, ref.referral_code AS referrer_code
             FROM users u
             LEFT JOIN users ref ON u.referred_by_id = ref.id
@@ -231,7 +231,7 @@ const getAdminUsers = async (req, res) => {
             referral_code: user.referral_code || `REF-${user.id}`,
             referred_by: user.referrer_first_name ? `${user.referrer_first_name} (${user.referrer_code})` : 'Direct Sign-Up',
             is_referral_rewarded: user.referred_by_id ? (user.is_referral_rewarded ? 'Yes (₹200 Paid)' : 'Pending Conversion') : 'N/A',
-            coins: parseInt(user.coins || 0),
+            cashback_earned: parseFloat(user.cashback_earned || 0),
             profile_pic_url: user.profile_pic_url,
             is_active: user.is_active !== false,
             created_at: new Date(user.created_at || new Date()).toLocaleDateString('en-IN')

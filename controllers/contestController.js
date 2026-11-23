@@ -256,32 +256,9 @@ const setAdminWinnersCount = async (req, res) => {
 const joinContest = async (req, res) => {
     try {
         const userId = req.user.userId;
-        const { contestId, productId, entryFee, useSuperCoins } = req.body;
-
-        const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
         const cId = contestId || `cnt_${pId}`;
-
-        let coinsDeducted = 0;
-        let rupeesDiscount = 0;
-
-        if (useSuperCoins === true) {
-            const userRes = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
-            const userCoins = userRes.rows[0] ? parseInt(userRes.rows[0].coins || 0) : 0;
-
-            const requiredCoins = Math.round(fee * 100); // 100 SuperCoins = ₹1
-            coinsDeducted = Math.min(userCoins, requiredCoins);
-            rupeesDiscount = Math.floor(coinsDeducted / 100);
-
-            if (coinsDeducted > 0) {
-                await pool.query(
-                    "UPDATE users SET coins = GREATEST(0, coins - $1) WHERE id = $2",
-                    [coinsDeducted, userId]
-                );
-            }
-        }
-
-        const remainingFeePaid = Math.max(0, fee - rupeesDiscount);
+        const remainingFeePaid = fee;
 
         const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [pId]);
         const product = productRes.rows[0];
@@ -720,7 +697,6 @@ module.exports = {
     joinContest,
     scratchVoucher,
     claimCashback,
-    claimSuperCoins,
     claimBuyRemaining,
     claimPrize,
     getContestHistory
