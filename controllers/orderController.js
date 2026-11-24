@@ -84,6 +84,29 @@ const placeOrder = async (req, res) => {
 
         await client.query("BEGIN");
 
+        // Check for duplicate order within last 15 seconds for same user and amount
+        const duplicateCheck = await client.query(
+            `SELECT id, order_total, payment_method, status FROM orders
+             WHERE user_id = $1 AND ABS(order_total - $2) < 0.01
+               AND created_at >= NOW() - INTERVAL '15 seconds'
+             ORDER BY created_at DESC LIMIT 1`,
+            [userId, orderTotal]
+        );
+
+        if (duplicateCheck.rows.length > 0) {
+            await client.query("ROLLBACK");
+            const existingOrder = duplicateCheck.rows[0];
+            return res.status(200).json({
+                success: true,
+                message: "Order already placed successfully!",
+                orderId: existingOrder.id,
+                orderTotal: parseFloat(existingOrder.order_total),
+                paymentMethod: existingOrder.payment_method,
+                status: existingOrder.status,
+                estimatedDelivery: estimatedDelivery
+            });
+        }
+
         await client.query(
             `INSERT INTO orders
             (id, user_id, items, delivery_address, payment_method, order_total, discount_amount, status)
