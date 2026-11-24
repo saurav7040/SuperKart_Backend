@@ -675,7 +675,7 @@ const getContestHistory = async (req, res) => {
              FROM user_contest_entries e
              JOIN contests c ON e.contest_id = c.id
              LEFT JOIN products p ON c.product_id = p.id
-             WHERE e.user_id = $1 AND (e.is_scratchable = TRUE OR e.is_scratched = TRUE OR c.status != 'LIVE_REGISTRATION')
+             WHERE e.user_id = $1 AND e.is_scratched = TRUE
              ORDER BY e.created_at DESC`,
             [userId]
         );
