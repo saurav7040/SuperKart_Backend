@@ -683,6 +683,8 @@ const getAdminOrders = async (req, res) => {
 
             const orderTotalVal = parseFloat(o.order_total || 0);
 
+            const accountOwner = `${o.first_name || 'Customer'} ${o.last_name || ''}`.trim();
+
             return {
                 id: String(o.id),
                 orderTotal: isNaN(orderTotalVal) ? 0 : orderTotalVal,
@@ -693,6 +695,10 @@ const getAdminOrders = async (req, res) => {
                 courierName: o.courier_name || 'Delhivery',
                 date: new Date(o.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
                 isGrandPrizeFree: isGrandPrizeFree,
+                accountOwnerName: accountOwner,
+                accountOwnerId: String(o.user_id),
+                recipientName: fullName,
+                recipientPhone: phone,
                 customerName: fullName,
                 customerPhone: phone,
                 productTitle: item.title || 'SuperKart Official Item',
