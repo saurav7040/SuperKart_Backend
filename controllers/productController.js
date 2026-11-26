@@ -13,22 +13,22 @@ const getProducts = async (req, res) => {
             SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
             FROM products p
             JOIN contests c ON p.id = c.product_id
-            WHERE (c.status IN ('ACTIVE', 'LIVE_REGISTRATION') OR (c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()))
+            WHERE c.status = 'LIVE_REGISTRATION'
             ORDER BY p.id ASC
         `;
 
         let params = [];
 
         if (category && category !== "all") {
+            const catMap = (category === 'shoes' || category === 'shoe') ? 'shoes' : 'smartphones';
             query = `
                 SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
                 FROM products p
                 JOIN contests c ON p.id = c.product_id
-                WHERE p.category = $1
-                  AND (c.status IN ('ACTIVE', 'LIVE_REGISTRATION') OR (c.entry_start_time <= NOW() AND c.entry_end_time >= NOW()))
+                WHERE p.category = $1 AND c.status = 'LIVE_REGISTRATION'
                 ORDER BY p.id ASC
             `;
-            params = [category];
+            params = [catMap];
         }
 
         const result = await pool.query(query, params);
