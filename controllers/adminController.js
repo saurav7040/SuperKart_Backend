@@ -783,12 +783,15 @@ const extendAdminContest = async (req, res) => {
         const newUnlocksAt = unlocksAt ? new Date(unlocksAt) : current.unlocks_at;
         const newFee = entryFee ? parseFloat(entryFee) : parseFloat(current.entry_fee);
 
+        const isLiveAgain = new Date(newEndTime) > new Date();
+        const newStatus = isLiveAgain ? 'LIVE_REGISTRATION' : current.status;
+
         const result = await pool.query(
             `UPDATE contests
-             SET entry_end_time = $1, unlocks_at = $2, entry_fee = $3, voucher_amount = $3
-             WHERE id = $4
+             SET entry_end_time = $1, unlocks_at = $2, entry_fee = $3, voucher_amount = $3, status = $4
+             WHERE id = $5
              RETURNING *`,
-            [newEndTime, newUnlocksAt, newFee, contestId]
+            [newEndTime, newUnlocksAt, newFee, newStatus, contestId]
         );
 
         const c = result.rows[0];
