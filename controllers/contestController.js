@@ -256,36 +256,35 @@ const setAdminWinnersCount = async (req, res) => {
 const joinContest = async (req, res) => {
     try {
         const userId = req.user.userId;
+        const { contestId, productId, entryFee } = req.body;
+
+        const pId = productId || 'shoe_1';
         const fee = Math.round(parseFloat(entryFee || 100.0));
         const cId = contestId || `cnt_${pId}`;
-        const remainingFeePaid = fee;
 
         const productRes = await pool.query("SELECT * FROM products WHERE id = $1", [pId]);
         const product = productRes.rows[0];
 
-        const title = product ? product.title.toUpperCase() : 'SOLE MATES.';
-        const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'THE SNEAKER EDIT';
+        const title = product ? product.title.toUpperCase() : 'FLASH CONTEST DROP';
+        const subtitle = product ? (product.subtitle || 'LIMITED EDITION').toUpperCase() : 'LIMITED DROP';
 
         await pool.query(
-            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), NOW() + INTERVAL '24 hours', NOW() + INTERVAL '48 hours', 'LIVE_REGISTRATION')
+            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 5, 1, NOW(), NOW() + INTERVAL '24 hours', NOW() + INTERVAL '48 hours', 'LIVE_REGISTRATION')
              ON CONFLICT (id) DO UPDATE SET joined_count = contests.joined_count + 1`,
             [cId, pId, title, subtitle, fee, fee]
         );
 
         await pool.query(
-            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratchable, is_scratched, is_winner, voucher_code)
-             VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, NULL)
+            `INSERT INTO user_contest_entries (user_id, contest_id, entry_fee_paid, voucher_claimed_amount, is_scratchable, is_scratched, is_winner, claim_type, claim_status, voucher_code)
+             VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, 'NONE', 'PENDING', NULL)
              ON CONFLICT (user_id, contest_id) DO UPDATE SET
                 is_scratched = FALSE,
                 is_winner = FALSE,
                 voucher_code = NULL,
                 created_at = NOW()`,
-            [userId, cId, remainingFeePaid, fee]
+            [userId, cId, fee, fee]
         );
-
-        const updatedUser = await pool.query("SELECT coins FROM users WHERE id = $1", [userId]);
-        const totalCoins = updatedUser.rows[0] ? updatedUser.rows[0].coins : 0;
 
         await pool.query(
             `INSERT INTO notifications (user_id, title, body, type, time_ago)
@@ -293,9 +292,7 @@ const joinContest = async (req, res) => {
             [
                 userId,
                 "⚡ Flash Contest Slot Joined!",
-                coinsDeducted > 0
-                    ? `Booked slot using ${coinsDeducted} SuperCoins (₹${rupeesDiscount} discount) + ₹${remainingFeePaid} cash.`
-                    : `You have successfully booked your slot for ₹${fee}. Contest unlocks soon!`,
+                `You have successfully booked your slot for ₹${fee}. Contest unlocks soon!`,
                 "contest",
                 "Just now"
             ]
@@ -305,10 +302,7 @@ const joinContest = async (req, res) => {
             success: true,
             message: "Joined contest successfully!",
             contestId: cId,
-            superCoinsUsed: coinsDeducted,
-            rupeesDiscount: rupeesDiscount,
-            remainingFeePaid: remainingFeePaid,
-            remainingSuperCoins: totalCoins
+            entryFeePaid: fee
         });
 
     } catch (error) {
