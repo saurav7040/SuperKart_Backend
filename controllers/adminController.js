@@ -445,20 +445,11 @@ const createAdminProduct = async (req, res) => {
             [productId, pTitle, pSub, pCategory, regPrice, winPrice, img, colorsJson, imagesJson]
         );
 
-        // Also seed active contest drop in contests table!
-        const contestId = `cnt_${productId}`;
-        await pool.query(
-            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 5, 0, NOW(), NOW() + INTERVAL '48 hours', NOW() + INTERVAL '72 hours', 'LIVE_REGISTRATION')
-             ON CONFLICT (id) DO NOTHING`,
-            [contestId, productId, pTitle.toUpperCase(), pSub.toUpperCase(), winPrice, winPrice]
-        );
-
         const p = result.rows[0];
 
         return res.status(201).json({
             success: true,
-            message: "Product, gallery images, color swatches, and active contest created successfully!",
+            message: "Product created successfully in PostgreSQL catalog!",
             product: {
                 id: String(p.id),
                 name: `${p.title} | ${p.subtitle}`,
