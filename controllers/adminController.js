@@ -704,29 +704,45 @@ const createAdminContest = async (req, res) => {
         const prod = prodRes.rows[0];
         const fee = parseFloat(entryFee);
 
-        const shortNum = crypto.randomInt(100, 999);
-        const contestId = `cnt_${productId}_${shortNum}`;
-
         const startTime = entryStartTime ? new Date(entryStartTime) : new Date();
         const endTime = entryEndTime ? new Date(entryEndTime) : new Date(Date.now() + 48 * 3600 * 1000);
         const resultTime = unlocksAt ? new Date(unlocksAt) : new Date(Date.now() + 72 * 3600 * 1000);
 
-        const result = await pool.query(
-            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 5, 0, $7, $8, $9, 'LIVE_REGISTRATION')
-             RETURNING *`,
-            [
-                contestId,
-                productId,
-                prod.title.toUpperCase(),
-                (prod.subtitle || 'LIMITED EDITION').toUpperCase(),
-                fee,
-                fee,
-                startTime,
-                endTime,
-                resultTime
-            ]
+        const existingContest = await pool.query(
+            "SELECT id FROM contests WHERE product_id = $1 ORDER BY entry_start_time DESC LIMIT 1",
+            [productId]
         );
+
+        let contestId = `cnt_${productId}`;
+        let result;
+
+        if (existingContest.rows.length > 0) {
+            contestId = existingContest.rows[0].id;
+            result = await pool.query(
+                `UPDATE contests
+                 SET entry_fee = $1, voucher_amount = $1, entry_start_time = $2, entry_end_time = $3, unlocks_at = $4, status = 'LIVE_REGISTRATION'
+                 WHERE id = $5
+                 RETURNING *`,
+                [fee, startTime, endTime, resultTime, contestId]
+            );
+        } else {
+            result = await pool.query(
+                `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, 5, 0, $7, $8, $9, 'LIVE_REGISTRATION')
+                 RETURNING *`,
+                [
+                    contestId,
+                    productId,
+                    prod.title.toUpperCase(),
+                    (prod.subtitle || 'LIMITED EDITION').toUpperCase(),
+                    fee,
+                    fee,
+                    startTime,
+                    endTime,
+                    resultTime
+                ]
+            );
+        }
 
         const c = result.rows[0];
 
