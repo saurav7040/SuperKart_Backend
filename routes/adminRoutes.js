@@ -30,5 +30,6 @@ router.post("/contests/:id/trigger-draw", adminController.triggerContestDraw);
 
 router.get("/orders", adminController.getAdminOrders);
 router.get("/referrals", adminController.getAdminReferrals);
+router.post("/referrals/payout", adminController.manualPayoutReferral);
 
 module.exports = router;

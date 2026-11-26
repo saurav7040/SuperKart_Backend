@@ -1129,7 +1129,7 @@ const getAdminOrders = async (req, res) => {
 };
 
 // ======================================
-// 10. GET PAGINATED REAL REFERRALS LIST
+// 19. GET PAGINATED REAL REFERRALS LIST
 // GET /api/v1/admin/referrals
 // ======================================
 const getAdminReferrals = async (req, res) => {
@@ -1140,8 +1140,8 @@ const getAdminReferrals = async (req, res) => {
         const offset = (page - 1) * limit;
 
         let query = `
-            SELECT u.id, u.first_name, u.referral_code, u.referred_by_id, u.is_referral_rewarded, u.created_at,
-                   ref.first_name AS referrer_name, ref.referral_code AS referrer_code
+            SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.referral_code, u.referred_by_id, u.is_referral_rewarded, u.created_at,
+                   ref.first_name AS referrer_first_name, ref.last_name AS referrer_last_name, ref.phone AS referrer_phone, ref.referral_code AS referrer_code
             FROM users u
             LEFT JOIN users ref ON u.referred_by_id = ref.id
             WHERE u.referred_by_id IS NOT NULL
@@ -1150,7 +1150,7 @@ const getAdminReferrals = async (req, res) => {
         let params = [];
 
         if (search) {
-            query += " AND (LOWER(u.first_name) LIKE $1 OR LOWER(u.referral_code) LIKE $1 OR LOWER(ref.first_name) LIKE $1)";
+            query += " AND (LOWER(u.first_name) LIKE $1 OR LOWER(u.referral_code) LIKE $1 OR LOWER(ref.first_name) LIKE $1 OR u.phone LIKE $1)";
             countQuery += " AND (LOWER(first_name) LIKE $1 OR LOWER(referral_code) LIKE $1)";
             params.push(`%${search.toLowerCase()}%`);
         }
@@ -1163,15 +1163,25 @@ const getAdminReferrals = async (req, res) => {
 
         const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
 
-        const formattedReferrals = result.rows.map(r => ({
-            id: String(r.id),
-            code: r.referrer_code || `REF-${r.referred_by_id}`,
-            referrer: r.referrer_name || `Referrer #${r.referred_by_id}`,
-            referred: r.first_name || `User #${r.id}`,
-            reward: rewardAmount,
-            status: r.is_referral_rewarded ? 'Rewarded (₹200 Paid)' : 'Pending Conversion',
-            date: new Date(r.created_at || new Date()).toLocaleDateString('en-IN')
-        }));
+        const formattedReferrals = result.rows.map(r => {
+            const referrer = `${r.referrer_first_name || 'Referrer'} ${r.referrer_last_name || ''}`.trim();
+            const referred = `${r.first_name || 'Friend'} ${r.last_name || ''}`.trim();
+
+            return {
+                id: String(r.id),
+                userId: String(r.id),
+                referrerId: String(r.referred_by_id),
+                referrerName: referrer,
+                referrerPhone: r.referrer_phone || 'N/A',
+                referrerCode: r.referrer_code || `REF-${r.referred_by_id}`,
+                referredName: referred,
+                referredPhone: r.phone || 'N/A',
+                rewardAmount: rewardAmount,
+                isRewarded: r.is_referral_rewarded || false,
+                status: r.is_referral_rewarded ? 'Rewarded (₹200 Paid) ✅' : 'Pending Conversion ⏳',
+                date: new Date(r.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            };
+        });
 
         return res.status(200).json({
             success: true,
@@ -1187,6 +1197,65 @@ const getAdminReferrals = async (req, res) => {
     } catch (error) {
         console.error("Get Admin Referrals Error:", error.message);
         return res.status(500).json({ success: false, message: "Failed to fetch referrals" });
+    }
+};
+
+// ======================================
+// 20. MANUAL REFERRAL REWARD PAYOUT
+// POST /api/v1/admin/referrals/payout
+// ======================================
+const manualPayoutReferral = async (req, res) => {
+    try {
+        const { userId } = req.body;
+
+        if (!userId) {
+            return res.status(400).json({ success: false, message: "userId is required" });
+        }
+
+        const userRes = await pool.query(
+            "SELECT id, referred_by_id, is_referral_rewarded FROM users WHERE id = $1",
+            [userId]
+        );
+
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        const user = userRes.rows[0];
+        const rewardAmount = parseFloat(process.env.REFERRAL_CASHBACK_REWARD || "200.00");
+
+        if (user.referred_by_id) {
+            await pool.query(
+                "UPDATE users SET cashback_earned = COALESCE(cashback_earned, 0) + $1 WHERE id = $2",
+                [rewardAmount, user.referred_by_id]
+            );
+
+            await pool.query(
+                `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    user.referred_by_id,
+                    `🎉 ₹${Math.round(rewardAmount)} Referral Cashback Credited!`,
+                    `Your ₹${Math.round(rewardAmount)} referral reward has been credited by SuperKart Admin!`,
+                    "reward",
+                    "Just now"
+                ]
+            );
+        }
+
+        await pool.query(
+            "UPDATE users SET is_referral_rewarded = TRUE WHERE id = $1",
+            [userId]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `Referral cashback reward of ₹${rewardAmount} credited successfully!`
+        });
+
+    } catch (error) {
+        console.error("Manual Payout Referral Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to credit referral payout" });
     }
 };
 
@@ -1209,5 +1278,6 @@ module.exports = {
     triggerContestDraw,
     updateProductStatus,
     getAdminOrders,
-    getAdminReferrals
+    getAdminReferrals,
+    manualPayoutReferral
 };
