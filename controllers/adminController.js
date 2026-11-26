@@ -613,6 +613,216 @@ const updateProductStatus = async (req, res) => {
 
 // ======================================
 // 9. GET PAGINATED REAL ORDERS LIST
+// ======================================
+// 9. GET PAGINATED CONTEST DROPS LIST
+// GET /api/v1/admin/contests
+// ======================================
+const getAdminContests = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page || '1');
+        const limit = parseInt(req.query.limit || '20');
+        const search = (req.query.search || '').trim();
+        const offset = (page - 1) * limit;
+
+        let query = `
+            SELECT c.*, p.title AS product_title, p.subtitle AS product_subtitle, p.image_url, p.regular_price, p.category
+            FROM contests c
+            LEFT JOIN products p ON c.product_id = p.id
+        `;
+        let countQuery = "SELECT COUNT(*) FROM contests c LEFT JOIN products p ON c.product_id = p.id";
+        let params = [];
+
+        if (search) {
+            query += " WHERE LOWER(c.id) LIKE $1 OR LOWER(c.title) LIKE $1 OR LOWER(p.title) LIKE $1";
+            countQuery += " WHERE LOWER(c.id) LIKE $1 OR LOWER(c.title) LIKE $1 OR LOWER(p.title) LIKE $1";
+            params.push(`%${search.toLowerCase()}%`);
+        }
+
+        query += ` ORDER BY c.entry_start_time DESC LIMIT ${limit} OFFSET ${offset}`;
+
+        const result = await pool.query(query, params);
+        const countRes = await pool.query(countQuery, params);
+        const total = parseInt(countRes.rows[0].count || 0);
+
+        const formattedContests = result.rows.map(c => {
+            const startTime = c.entry_start_time ? new Date(c.entry_start_time).toISOString() : new Date().toISOString();
+            const endTime = c.entry_end_time ? new Date(c.entry_end_time).toISOString() : new Date(Date.now() + 172800000).toISOString();
+            const unlocksAt = c.unlocks_at ? new Date(c.unlocks_at).toISOString() : new Date(Date.now() + 259200000).toISOString();
+
+            return {
+                id: String(c.id),
+                productId: c.product_id,
+                productTitle: c.product_title || c.title,
+                productSubtitle: c.product_subtitle || c.subtitle || 'LIMITED DROP',
+                imageUrl: c.image_url || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                category: c.category || 'shoes',
+                regularPrice: parseFloat(c.regular_price || 3599),
+                entryFee: parseFloat(c.entry_fee || 100),
+                joinedCount: parseInt(c.joined_count || 0),
+                maxWinners: parseInt(c.max_winners || 5),
+                entryStartTime: startTime,
+                entryEndTime: endTime,
+                unlocksAt: unlocksAt,
+                status: c.status || 'LIVE_REGISTRATION'
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: formattedContests,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                totalPages: Math.ceil(total / limit) || 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Admin Contests Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch contest drops" });
+    }
+};
+
+// ======================================
+// 10. CREATE/LAUNCH NEW FLASH CONTEST DROP
+// POST /api/v1/admin/contests
+// ======================================
+const createAdminContest = async (req, res) => {
+    try {
+        const { productId, entryFee, entryStartTime, entryEndTime, unlocksAt } = req.body;
+
+        if (!productId || !entryFee) {
+            return res.status(400).json({ success: false, message: "productId and entryFee are required" });
+        }
+
+        const prodRes = await pool.query("SELECT * FROM products WHERE id = $1", [productId]);
+        if (prodRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Selected product not found in catalog" });
+        }
+
+        const prod = prodRes.rows[0];
+        const fee = parseFloat(entryFee);
+
+        const shortNum = crypto.randomInt(100, 999);
+        const contestId = `cnt_${productId}_${shortNum}`;
+
+        const startTime = entryStartTime ? new Date(entryStartTime) : new Date();
+        const endTime = entryEndTime ? new Date(entryEndTime) : new Date(Date.now() + 48 * 3600 * 1000);
+        const resultTime = unlocksAt ? new Date(unlocksAt) : new Date(Date.now() + 72 * 3600 * 1000);
+
+        const result = await pool.query(
+            `INSERT INTO contests (id, product_id, title, subtitle, entry_fee, voucher_amount, max_winners, joined_count, entry_start_time, entry_end_time, unlocks_at, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 5, 0, $7, $8, $9, 'LIVE_REGISTRATION')
+             RETURNING *`,
+            [
+                contestId,
+                productId,
+                prod.title.toUpperCase(),
+                (prod.subtitle || 'LIMITED EDITION').toUpperCase(),
+                fee,
+                fee,
+                startTime,
+                endTime,
+                resultTime
+            ]
+        );
+
+        const c = result.rows[0];
+
+        return res.status(201).json({
+            success: true,
+            message: "Flash Contest drop launched successfully!",
+            contest: {
+                id: c.id,
+                productId: c.product_id,
+                title: c.title,
+                entryFee: parseFloat(c.entry_fee),
+                status: c.status
+            }
+        });
+
+    } catch (error) {
+        console.error("Create Admin Contest Error:", error.message);
+        return res.status(500).json({ success: false, message: error.message || "Failed to launch contest drop" });
+    }
+};
+
+// ======================================
+// 11. EXTEND CONTEST ENTRY END TIME / RESULT DECLARATION DATE
+// PUT /api/v1/admin/contests/:id/extend
+// ======================================
+const extendAdminContest = async (req, res) => {
+    try {
+        const contestId = req.params.id;
+        const { entryEndTime, unlocksAt, entryFee } = req.body;
+
+        const cRes = await pool.query("SELECT * FROM contests WHERE id = $1", [contestId]);
+        if (cRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest drop not found" });
+        }
+
+        const current = cRes.rows[0];
+        const newEndTime = entryEndTime ? new Date(entryEndTime) : current.entry_end_time;
+        const newUnlocksAt = unlocksAt ? new Date(unlocksAt) : current.unlocks_at;
+        const newFee = entryFee ? parseFloat(entryFee) : parseFloat(current.entry_fee);
+
+        const result = await pool.query(
+            `UPDATE contests
+             SET entry_end_time = $1, unlocks_at = $2, entry_fee = $3, voucher_amount = $3
+             WHERE id = $4
+             RETURNING *`,
+            [newEndTime, newUnlocksAt, newFee, contestId]
+        );
+
+        const c = result.rows[0];
+
+        return res.status(200).json({
+            success: true,
+            message: `Contest drop ${contestId} extended successfully!`,
+            contest: {
+                id: c.id,
+                entryEndTime: c.entry_end_time,
+                unlocksAt: c.unlocks_at,
+                entryFee: parseFloat(c.entry_fee)
+            }
+        });
+
+    } catch (error) {
+        console.error("Extend Admin Contest Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to extend contest drop" });
+    }
+};
+
+// ======================================
+// 12. DELETE CONTEST DROP
+// DELETE /api/v1/admin/contests/:id
+// ======================================
+const deleteAdminContest = async (req, res) => {
+    try {
+        const contestId = req.params.id;
+
+        await pool.query("DELETE FROM user_contest_entries WHERE contest_id = $1", [contestId]);
+        await pool.query("DELETE FROM contest_winners WHERE contest_id = $1", [contestId]);
+        const result = await pool.query("DELETE FROM contests WHERE id = $1 RETURNING *", [contestId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest drop not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Contest drop ${contestId} deleted successfully!`
+        });
+
+    } catch (error) {
+        console.error("Delete Admin Contest Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to delete contest drop" });
+    }
+};
+
+// ======================================
+// 13. GET PAGINATED REAL ORDERS LIST
 // GET /api/v1/admin/orders
 // ======================================
 const getAdminOrders = async (req, res) => {
@@ -799,6 +1009,10 @@ module.exports = {
     createAdminProduct,
     updateAdminProduct,
     deleteAdminProduct,
+    getAdminContests,
+    createAdminContest,
+    extendAdminContest,
+    deleteAdminContest,
     updateProductStatus,
     getAdminOrders,
     getAdminReferrals

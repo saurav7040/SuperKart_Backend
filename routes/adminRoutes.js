@@ -18,6 +18,13 @@ router.post("/products", adminController.createAdminProduct);
 router.put("/products/:id", adminController.updateAdminProduct);
 router.delete("/products/:id", adminController.deleteAdminProduct);
 router.patch("/products/:id/status", adminController.updateProductStatus);
+
+// Admin Contest Management Routes
+router.get("/contests", adminController.getAdminContests);
+router.post("/contests", adminController.createAdminContest);
+router.put("/contests/:id/extend", adminController.extendAdminContest);
+router.delete("/contests/:id", adminController.deleteAdminContest);
+
 router.get("/orders", adminController.getAdminOrders);
 router.get("/referrals", adminController.getAdminReferrals);
 
