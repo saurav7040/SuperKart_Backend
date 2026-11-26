@@ -369,10 +369,10 @@ const getAdminProducts = async (req, res) => {
                 image_url: p.image_url,
                 images_list: parsedImages,
                 available_colors: parsedColors,
-                contest_id: p.contest_id || `cnt_${p.id}`,
-                max_winners: parseInt(p.max_winners || 5),
+                contest_id: p.contest_id ? String(p.contest_id) : 'Unlinked Inventory',
+                max_winners: parseInt(p.max_winners || 0),
                 joined_count: parseInt(p.joined_count || 0),
-                contest_status: p.contest_status || 'LIVE_REGISTRATION',
+                contest_status: p.contest_status ? String(p.contest_status) : 'UNLINKED',
                 status: 'Active'
             };
         });

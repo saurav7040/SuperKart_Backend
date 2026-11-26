@@ -10,7 +10,7 @@ const getProducts = async (req, res) => {
 
         // SQL Query: ONLY fetch products with an active OPEN contest entry window!
         let query = `
-            SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
+            SELECT p.*, c.id AS contest_id, c.entry_fee, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
             FROM products p
             JOIN contests c ON p.id = c.product_id
             WHERE c.status = 'LIVE_REGISTRATION'
@@ -22,7 +22,7 @@ const getProducts = async (req, res) => {
         if (category && category !== "all") {
             const catMap = (category === 'shoes' || category === 'shoe') ? 'shoes' : 'smartphones';
             query = `
-                SELECT p.*, c.id AS contest_id, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
+                SELECT p.*, c.id AS contest_id, c.entry_fee, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
                 FROM products p
                 JOIN contests c ON p.id = c.product_id
                 WHERE p.category = $1 AND c.status = 'LIVE_REGISTRATION'
@@ -39,7 +39,7 @@ const getProducts = async (req, res) => {
             subtitle: row.subtitle,
             category: row.category || 'shoes',
             regularPrice: parseFloat(row.regular_price),
-            winOfferPrice: parseFloat(row.win_offer_price),
+            winOfferPrice: parseFloat(row.entry_fee || row.win_offer_price || 100),
             imageUrl: row.image_url,
             imagesList: Array.isArray(row.images_list)
                 ? row.images_list
