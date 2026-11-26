@@ -14,6 +14,8 @@ const getProducts = async (req, res) => {
             FROM products p
             JOIN contests c ON p.id = c.product_id
             WHERE c.status = 'LIVE_REGISTRATION'
+              AND c.entry_start_time <= NOW()
+              AND c.entry_end_time >= NOW()
             ORDER BY p.id ASC
         `;
 
@@ -25,7 +27,10 @@ const getProducts = async (req, res) => {
                 SELECT p.*, c.id AS contest_id, c.entry_fee, c.entry_start_time, c.entry_end_time, c.unlocks_at, c.status AS contest_status
                 FROM products p
                 JOIN contests c ON p.id = c.product_id
-                WHERE p.category = $1 AND c.status = 'LIVE_REGISTRATION'
+                WHERE p.category = $1
+                  AND c.status = 'LIVE_REGISTRATION'
+                  AND c.entry_start_time <= NOW()
+                  AND c.entry_end_time >= NOW()
                 ORDER BY p.id ASC
             `;
             params = [catMap];
