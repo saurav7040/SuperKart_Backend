@@ -19,11 +19,14 @@ router.put("/products/:id", adminController.updateAdminProduct);
 router.delete("/products/:id", adminController.deleteAdminProduct);
 router.patch("/products/:id/status", adminController.updateProductStatus);
 
-// Admin Contest Management Routes
+// Admin Contest Management & Multi-Winner Draw Routes
 router.get("/contests", adminController.getAdminContests);
 router.post("/contests", adminController.createAdminContest);
 router.put("/contests/:id/extend", adminController.extendAdminContest);
 router.delete("/contests/:id", adminController.deleteAdminContest);
+router.get("/contests/:id/participants", adminController.getContestParticipants);
+router.put("/contests/:id/max-winners", adminController.updateContestMaxWinners);
+router.post("/contests/:id/trigger-draw", adminController.triggerContestDraw);
 
 router.get("/orders", adminController.getAdminOrders);
 router.get("/referrals", adminController.getAdminReferrals);

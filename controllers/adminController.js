@@ -822,7 +822,198 @@ const deleteAdminContest = async (req, res) => {
 };
 
 // ======================================
-// 13. GET PAGINATED REAL ORDERS LIST
+// 15. GET CONTEST PARTICIPANTS & WINNERS LIST
+// GET /api/v1/admin/contests/:id/participants
+// ======================================
+const getContestParticipants = async (req, res) => {
+    try {
+        const contestId = req.params.id;
+
+        const result = await pool.query(
+            `SELECT e.id AS entry_id, e.user_id, e.entry_fee_paid, e.is_scratchable, e.is_scratched,
+                    e.is_winner, e.claim_type, e.claim_status, e.order_id, e.created_at AS joined_at,
+                    u.first_name, u.last_name, u.email, u.phone
+             FROM user_contest_entries e
+             LEFT JOIN users u ON e.user_id = u.id
+             WHERE e.contest_id = $1
+             ORDER BY e.created_at ASC`,
+            [contestId]
+        );
+
+        const participants = result.rows.map(row => {
+            const name = `${row.first_name || 'Customer'} ${row.last_name || ''}`.trim();
+            const phone = row.phone || 'N/A';
+            const email = row.email || 'N/A';
+
+            let outcomeStatus = 'PENDING ⏳';
+            if (row.is_scratched || row.claim_status === 'COMPLETED' || row.is_winner) {
+                outcomeStatus = row.is_winner ? 'WINNER 🏆' : 'NON-WINNER / LOSER 💵';
+            }
+
+            return {
+                id: String(row.entry_id),
+                userId: String(row.user_id),
+                fullName: name,
+                phone: phone,
+                email: email,
+                entryFeePaid: parseFloat(row.entry_fee_paid || 100),
+                isWinner: row.is_winner || false,
+                isScratched: row.is_scratched || false,
+                claimType: row.claim_type || 'NONE',
+                claimStatus: row.claim_status || 'PENDING',
+                orderId: row.order_id,
+                outcomeStatus: outcomeStatus,
+                joinedAt: new Date(row.joined_at || new Date()).toLocaleString('en-IN')
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            contestId: contestId,
+            totalJoined: participants.length,
+            winnersCount: participants.filter(p => p.isWinner).length,
+            losersCount: participants.filter(p => !p.isWinner && (p.isScratched || p.outcomeStatus.includes('LOSER'))).length,
+            participants: participants
+        });
+
+    } catch (error) {
+        console.error("Get Contest Participants Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to fetch contest participants" });
+    }
+};
+
+// ======================================
+// 16. UPDATE CONTEST MAX WINNERS COUNT
+// PUT /api/v1/admin/contests/:id/max-winners
+// ======================================
+const updateContestMaxWinners = async (req, res) => {
+    try {
+        const contestId = req.params.id;
+        const { maxWinners } = req.body;
+
+        if (!maxWinners || parseInt(maxWinners) < 1) {
+            return res.status(400).json({ success: false, message: "Valid maxWinners count is required" });
+        }
+
+        const numWinners = parseInt(maxWinners);
+
+        const result = await pool.query(
+            "UPDATE contests SET max_winners = $1 WHERE id = $2 RETURNING *",
+            [numWinners, contestId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest drop not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Max winners count updated to ${numWinners} for contest #${contestId}`,
+            contest: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Update Max Winners Error:", error.message);
+        return res.status(500).json({ success: false, message: "Failed to update max winners count" });
+    }
+};
+
+// ======================================
+// 17. TRIGGER LUCKY DRAW & SELECT MULTI-WINNERS
+// POST /api/v1/admin/contests/:id/trigger-draw
+// ======================================
+const triggerContestDraw = async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const contestId = req.params.id;
+
+        const contestRes = await client.query("SELECT * FROM contests WHERE id = $1", [contestId]);
+        if (contestRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Contest drop not found" });
+        }
+
+        const contest = contestRes.rows[0];
+        const maxWinners = parseInt(contest.max_winners || 1);
+
+        const entriesRes = await client.query(
+            "SELECT id, user_id FROM user_contest_entries WHERE contest_id = $1",
+            [contestId]
+        );
+
+        if (entriesRes.rows.length === 0) {
+            return res.status(400).json({ success: false, message: "No participants have joined this contest yet!" });
+        }
+
+        await client.query("BEGIN");
+
+        const allEntries = entriesRes.rows;
+
+        // Shuffle entries randomly
+        const shuffled = [...allEntries].sort(() => 0.5 - Math.random());
+        const winnerEntries = shuffled.slice(0, Math.min(maxWinners, shuffled.length));
+        const winnerIds = winnerEntries.map(e => e.id);
+
+        // 1. Mark winners
+        if (winnerIds.length > 0) {
+            await client.query(
+                `UPDATE user_contest_entries
+                 SET is_winner = TRUE, is_scratchable = TRUE
+                 WHERE id = ANY($1::int[])`,
+                [winnerIds]
+            );
+        }
+
+        // 2. Mark remaining participants as non-winners (0% Loss Eligible)
+        await client.query(
+            `UPDATE user_contest_entries
+             SET is_winner = FALSE, is_scratchable = TRUE
+             WHERE contest_id = $1 AND NOT (id = ANY($2::int[]))`,
+            [contestId, winnerIds.length > 0 ? winnerIds : [-1]]
+        );
+
+        // 3. Update contest status to LOCKED_SCRATCHABLE
+        await client.query(
+            "UPDATE contests SET status = 'LOCKED_SCRATCHABLE', unlocks_at = NOW() WHERE id = $1",
+            [contestId]
+        );
+
+        // 4. Send Notifications
+        for (const entry of winnerEntries) {
+            await client.query(
+                `INSERT INTO notifications (user_id, title, body, type, time_ago)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    entry.user_id,
+                    "🏆 YOU WON THE GRAND PRIZE!",
+                    `Congratulations! You won the grand prize for ${contest.title}! Scratch card in My Contest to claim.`,
+                    "contest",
+                    "Just now"
+                ]
+            );
+        }
+
+        await client.query("COMMIT");
+
+        return res.status(200).json({
+            success: true,
+            message: `Lucky Draw Triggered! Selected ${winnerEntries.length} winners out of ${allEntries.length} participants.`,
+            totalParticipants: allEntries.length,
+            winnersSelectedCount: winnerEntries.length,
+            contestId: contestId
+        });
+
+    } catch (error) {
+        await client.query("ROLLBACK");
+        console.error("Trigger Draw Error:", error.message);
+        return res.status(500).json({ success: false, message: error.message || "Failed to trigger lucky draw" });
+    } finally {
+        client.release();
+    }
+};
+
+// ======================================
+// 18. GET PAGINATED REAL ORDERS LIST
 // GET /api/v1/admin/orders
 // ======================================
 const getAdminOrders = async (req, res) => {
@@ -1013,6 +1204,9 @@ module.exports = {
     createAdminContest,
     extendAdminContest,
     deleteAdminContest,
+    getContestParticipants,
+    updateContestMaxWinners,
+    triggerContestDraw,
     updateProductStatus,
     getAdminOrders,
     getAdminReferrals
