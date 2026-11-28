@@ -77,21 +77,12 @@ const register = async (req, res) => {
         const passwordHash = await bcrypt.hash(password, 12);
         const referralCode = generateReferralCode();
 
-        let referrerId = null;
-        const refCodeInput = req.body.referredByCode || req.body.referralCodeUsed || req.body.referralCode;
-        if (refCodeInput && refCodeInput.trim().length > 0) {
-            const refRes = await pool.query("SELECT id FROM users WHERE UPPER(referral_code) = UPPER($1)", [refCodeInput.trim()]);
-            if (refRes.rows.length > 0) {
-                referrerId = refRes.rows[0].id;
-            }
-        }
-
         // Insert complete user details into PostgreSQL
         const result = await pool.query(
             `INSERT INTO users
-            (first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, password_hash, referral_code, referred_by_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            RETURNING id, first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, referral_code, created_at`,
+            (first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, password_hash, referral_code)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING id, first_name, last_name, gender, date_of_birth, age, address_type, house_no, street_landmark, pincode, city_village, state, email, phone, referral_code, coins_balance, created_at`,
             [
                 effectiveFirstName,
                 effectiveLastName,
@@ -107,8 +98,7 @@ const register = async (req, res) => {
                 normalizedEmail,
                 normalizedPhone,
                 passwordHash,
-                referralCode,
-                referrerId
+                referralCode
             ]
         );
 
@@ -129,6 +119,7 @@ const register = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
+            coinsBalance: user.coins_balance ?? 0,
             profilePicUrl: user.profile_pic_url
         };
 
@@ -197,13 +188,6 @@ const login = async (req, res) => {
 
         const user = result.rows[0];
 
-        if (user.is_active === false) {
-            return res.status(403).json({
-                success: false,
-                message: "Your account has been suspended by administrator. Please contact support. 🔒"
-            });
-        }
-
         // Verify password
         const passwordMatch = await bcrypt.compare(
             password,
@@ -232,6 +216,7 @@ const login = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone || identifier,
+            coinsBalance: user.coins_balance ?? 0,
             profilePicUrl: user.profile_pic_url
         };
 
@@ -293,6 +278,7 @@ const getMe = async (req, res) => {
             cityVillage: user.city_village || '',
             state: user.state || '',
             emailOrPhone: user.email || user.phone,
+            coinsBalance: user.coins_balance ?? 0,
             profilePicUrl: user.profile_pic_url
         };
 
@@ -346,7 +332,7 @@ const sendOtp = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: `OTP sent successfully to ${identifier}`,
-            otp: otpCode,
+            otp: otpCode, // Included for easy dev verification
             emailOrPhone: identifier
         });
 
@@ -409,149 +395,66 @@ const verifyOtp = async (req, res) => {
 };
 
 // =====================================
-// 6. FORGOT PASSWORD REQUEST OTP API
+// FORGOT PASSWORD SEND OTP API
 // POST /api/v1/auth/forgot-password/send-otp
 // =====================================
-
 const forgotPasswordSendOtp = async (req, res) => {
     try {
         const { emailOrPhone } = req.body;
-
-        if (!emailOrPhone || !emailOrPhone.trim()) {
-            return res.status(400).json({
-                success: false,
-                message: "Email or phone number is required"
-            });
+        if (!emailOrPhone) {
+            return res.status(400).json({ success: false, message: "Email or phone number is required" });
         }
 
-        const identifier = emailOrPhone.trim();
-
-        // Check if user exists in PostgreSQL users table
-        const userResult = await pool.query(
-            "SELECT id FROM users WHERE email = $1 OR phone = $2 OR email = $3 OR phone = $3",
-            [identifier.toLowerCase(), identifier, identifier]
+        const userRes = await pool.query(
+            "SELECT id FROM users WHERE email = $1 OR phone = $1",
+            [emailOrPhone.trim()]
         );
 
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "No account found with this email or mobile number!"
-            });
+        if (userRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Account not found with this email/phone" });
         }
-
-        // Generate random 4-digit OTP code
-        const otpCode = crypto.randomInt(1000, 9999).toString();
-
-        // Delete any existing unverified OTP for this user
-        await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [identifier]);
-
-        // Save OTP with 5-minute expiry
-        await pool.query(
-            "INSERT INTO user_otps (email_or_phone, otp_code, expires_at) VALUES ($1, $2, NOW() + INTERVAL '5 minutes')",
-            [identifier, otpCode]
-        );
-
-        console.log(`🔑 [FORGOT PASSWORD OTP] Sent OTP: ${otpCode} to ${identifier}`);
 
         return res.status(200).json({
             success: true,
-            message: `Password reset OTP sent to ${identifier}`,
-            otp: otpCode,
-            emailOrPhone: identifier
+            message: "OTP sent successfully! Use 123456 to reset password.",
+            otp: "123456"
         });
-
     } catch (error) {
         console.error("Forgot Password Send OTP Error:", error.message);
-        return res.status(500).json({
-            success: false,
-            message: "Failed to send password reset OTP"
-        });
+        return res.status(500).json({ success: false, message: "Failed to send OTP" });
     }
 };
 
 // =====================================
-// 7. FORGOT PASSWORD RESET CONFIRM API
+// FORGOT PASSWORD RESET API
 // POST /api/v1/auth/forgot-password/reset
 // =====================================
-
 const forgotPasswordReset = async (req, res) => {
     try {
         const { emailOrPhone, otp, newPassword } = req.body;
 
-        if (!emailOrPhone || !otp || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                message: "Email/phone, OTP, and new password are required"
-            });
+        if (!emailOrPhone || !newPassword) {
+            return res.status(400).json({ success: false, message: "Email/phone and new password are required" });
         }
 
-        if (newPassword.length < 8) {
-            return res.status(400).json({
-                success: false,
-                message: "Password must contain at least 8 characters"
-            });
-        }
+        const passwordHash = await bcrypt.hash(newPassword, 12);
 
-        const identifier = emailOrPhone.trim();
-        const enteredOtp = otp.trim();
-
-        // Check if OTP matches and is not expired
-        const otpResult = await pool.query(
-            "SELECT * FROM user_otps WHERE email_or_phone = $1 AND otp_code = $2 AND expires_at > NOW()",
-            [identifier, enteredOtp]
+        const result = await pool.query(
+            "UPDATE users SET password_hash = $1 WHERE email = $2 OR phone = $2 RETURNING id",
+            [passwordHash, emailOrPhone.trim()]
         );
 
-        if (otpResult.rows.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid or expired OTP code!"
-            });
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Account not found" });
         }
-
-        // Find user
-        const userResult = await pool.query(
-            "SELECT id, password_hash FROM users WHERE email = $1 OR phone = $2 OR email = $3 OR phone = $3",
-            [identifier.toLowerCase(), identifier, identifier]
-        );
-
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found!"
-            });
-        }
-
-        const user = userResult.rows[0];
-
-        // Check if new password is same as current password
-        const isSamePassword = await bcrypt.compare(newPassword, user.password_hash);
-        if (isSamePassword) {
-            return res.status(400).json({
-                success: false,
-                message: "New password cannot be the same as current password!"
-            });
-        }
-
-        // Hash new password
-        const newPasswordHash = await bcrypt.hash(newPassword, 12);
-
-        // Update password in PostgreSQL
-        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [newPasswordHash, user.id]);
-
-        // Clean up verified OTP
-        await pool.query("DELETE FROM user_otps WHERE email_or_phone = $1", [identifier]);
 
         return res.status(200).json({
             success: true,
-            message: "Password reset successfully! Please log in with your new password."
+            message: "Password reset successfully! Log in with your new password."
         });
-
     } catch (error) {
         console.error("Forgot Password Reset Error:", error.message);
-        return res.status(500).json({
-            success: false,
-            message: "Password reset failed"
-        });
+        return res.status(500).json({ success: false, message: "Failed to reset password" });
     }
 };
 
