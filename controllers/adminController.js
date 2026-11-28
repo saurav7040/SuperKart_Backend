@@ -649,6 +649,24 @@ const getAdminContests = async (req, res) => {
             const endTime = c.entry_end_time ? new Date(c.entry_end_time).toISOString() : new Date(Date.now() + 172800000).toISOString();
             const unlocksAt = c.unlocks_at ? new Date(c.unlocks_at).toISOString() : new Date(Date.now() + 259200000).toISOString();
 
+            const now = new Date();
+            const startD = new Date(startTime);
+            const endD = new Date(endTime);
+            const unlockD = new Date(unlocksAt);
+
+            let computedStatus = c.status || 'LIVE_REGISTRATION';
+            if (computedStatus !== 'LOCKED_SCRATCHABLE') {
+                if (now < startD) {
+                    computedStatus = 'SCHEDULED';
+                } else if (now >= startD && now <= endD) {
+                    computedStatus = 'LIVE_REGISTRATION';
+                } else if (now > endD && now < unlockD) {
+                    computedStatus = 'ENTRY_CLOSED';
+                } else if (now >= unlockD) {
+                    computedStatus = 'LOCKED_SCRATCHABLE';
+                }
+            }
+
             return {
                 id: String(c.id),
                 productId: c.product_id,
@@ -663,7 +681,7 @@ const getAdminContests = async (req, res) => {
                 entryStartTime: startTime,
                 entryEndTime: endTime,
                 unlocksAt: unlocksAt,
-                status: c.status || 'LIVE_REGISTRATION'
+                status: computedStatus
             };
         });
 
