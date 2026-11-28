@@ -133,8 +133,9 @@ const getMyActiveContest = async (req, res) => {
 // ======================================
 const triggerWinnerDrawAlgorithm = async () => {
     try {
+        // Trigger draw ONLY when Result Declaration Date (unlocks_at) has passed!
         const expiredContests = await pool.query(
-            "SELECT id, COALESCE(max_winners, 1) AS max_winners, COALESCE(voucher_amount, entry_fee) AS voucher_amount FROM contests WHERE (entry_end_time <= NOW() OR unlocks_at <= NOW()) AND (status = 'ACTIVE' OR status = 'LIVE_REGISTRATION')"
+            "SELECT id, COALESCE(max_winners, 1) AS max_winners, COALESCE(voucher_amount, entry_fee) AS voucher_amount FROM contests WHERE unlocks_at <= NOW() AND (status = 'ACTIVE' OR status = 'LIVE_REGISTRATION')"
         );
 
         for (const contest of expiredContests.rows) {
