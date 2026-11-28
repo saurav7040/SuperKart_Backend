@@ -120,42 +120,100 @@ const getAdminMe = async (req, res) => {
 const getAdminDashboard = async (req, res) => {
     try {
         const totalUsersRes = await pool.query("SELECT COUNT(*) FROM users");
-        const activeUsersRes = await pool.query("SELECT COUNT(*) FROM users");
         const totalProductsRes = await pool.query("SELECT COUNT(*) FROM products");
-        const activeProductsRes = await pool.query("SELECT COUNT(*) FROM products");
+        const activeContestsRes = await pool.query("SELECT COUNT(*) FROM contests WHERE status = 'LIVE_REGISTRATION'");
         const totalOrdersRes = await pool.query("SELECT COUNT(*) FROM orders");
-        const pendingOrdersRes = await pool.query("SELECT COUNT(*) FROM orders WHERE status = 'CONFIRMED' OR status = 'SHIPPED'");
-        const totalReferralsRes = await pool.query("SELECT COUNT(*) FROM users WHERE referred_by_id IS NOT NULL");
         const totalRevenueRes = await pool.query("SELECT COALESCE(SUM(order_total), 0) AS revenue FROM orders");
 
+        // Contest Funnel Metrics
+        const totalSlotBookingsRes = await pool.query("SELECT COUNT(*) FROM user_contest_entries");
+        const winnersRes = await pool.query("SELECT COUNT(*) FROM user_contest_entries WHERE is_winner = TRUE");
+        const cashbackRes = await pool.query("SELECT COUNT(*) FROM user_contest_entries WHERE claim_type = 'CASHBACK'");
+        const buyRemainingRes = await pool.query("SELECT COUNT(*) FROM user_contest_entries WHERE claim_type = 'BUY_REMAINING'");
+
+        // Fetch Top 5 Recent Orders with full details
         const recentOrdersRes = await pool.query(`
-            SELECT id, user_id, order_total, payment_method, status, created_at, items
-            FROM orders
-            ORDER BY created_at DESC
-            LIMIT 10
+            SELECT o.*, u.first_name, u.last_name, u.phone AS user_phone
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.id
+            ORDER BY o.created_at DESC
+            LIMIT 5
         `);
 
-        const formattedOrders = recentOrdersRes.rows.map(row => ({
-            id: row.id,
-            customer: `User #${row.user_id}`,
-            date: new Date(row.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-            total: parseFloat(row.order_total || 0),
-            status: row.status || 'CONFIRMED'
+        const formattedOrders = recentOrdersRes.rows.map(o => {
+            let itemsList = [];
+            try {
+                itemsList = typeof o.items === 'string' ? JSON.parse(o.items) : (o.items || []);
+            } catch (_) {
+                itemsList = [];
+            }
+
+            let deliveryAddr = {};
+            try {
+                deliveryAddr = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : (o.delivery_address || {});
+            } catch (_) {
+                deliveryAddr = {};
+            }
+
+            const item = itemsList.length > 0 ? itemsList[0] : {};
+            const isGrandPrize = item.isGrandPrize === true || parseFloat(o.order_total || 0) === 0;
+
+            const fullName = deliveryAddr.fullName || `${o.first_name || 'Customer'} ${o.last_name || ''}`.trim();
+            const phone = deliveryAddr.phone || o.user_phone || 'N/A';
+            const accountOwner = `${o.first_name || 'Customer'} ${o.last_name || ''}`.trim();
+
+            return {
+                id: String(o.id),
+                accountOwnerName: accountOwner,
+                accountOwnerId: String(o.user_id),
+                recipientName: fullName,
+                recipientPhone: phone,
+                productTitle: item.title || 'SuperKart Official Item',
+                imageUrl: item.imageUrl || 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a',
+                selectedSize: item.selectedSize || 'IND-8',
+                quantity: item.quantity || 1,
+                orderTotal: parseFloat(o.order_total || 0),
+                paymentMethod: o.payment_method || 'UPI',
+                status: (o.status || 'CONFIRMED').toUpperCase(),
+                isGrandPrizeFree: isGrandPrize,
+                date: new Date(o.created_at || new Date()).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+            };
+        });
+
+        // Top 3 Most Popular Contest Drops
+        const topProductsRes = await pool.query(`
+            SELECT p.id, p.title, p.subtitle, p.image_url, p.regular_price,
+                   COALESCE(c.joined_count, 0) AS joined_count, COALESCE(c.entry_fee, 100) AS entry_fee
+            FROM products p
+            LEFT JOIN contests c ON p.id = c.product_id
+            ORDER BY COALESCE(c.joined_count, 0) DESC, p.id ASC
+            LIMIT 3
+        `);
+
+        const formattedTopProducts = topProductsRes.rows.map(p => ({
+            id: String(p.id),
+            title: p.title,
+            subtitle: p.subtitle || 'LIMITED DROP',
+            imageUrl: p.image_url,
+            regularPrice: parseFloat(p.regular_price || 3599),
+            entryFee: parseFloat(p.entry_fee || 100),
+            joinedCount: parseInt(p.joined_count || 0),
+            totalRevenue: parseInt(p.joined_count || 0) * parseFloat(p.entry_fee || 100)
         }));
 
-        // Dynamic monthly sales calculation
+        // 7-Day Revenue Trend Bar Data
         const salesRes = await pool.query(`
-            SELECT TO_CHAR(created_at, 'Mon') AS month, COALESCE(SUM(order_total), 0) AS sales
+            SELECT TO_CHAR(created_at, 'DD Mon') AS day_label, COALESCE(SUM(order_total), 0) AS daily_sales
             FROM orders
-            GROUP BY TO_CHAR(created_at, 'Mon'), DATE_TRUNC('month', created_at)
-            ORDER BY DATE_TRUNC('month', created_at) ASC
-            LIMIT 6
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY TO_CHAR(created_at, 'DD Mon'), DATE_TRUNC('day', created_at)
+            ORDER BY DATE_TRUNC('day', created_at) ASC
         `);
 
-        let salesList = salesRes.rows.map(r => ({ month: r.month, sales: parseFloat(r.sales) }));
+        let salesList = salesRes.rows.map(r => ({ day: r.day_label, sales: parseFloat(r.daily_sales) }));
         if (salesList.length === 0) {
             salesList = [
-                { month: 'Nov', sales: parseFloat(totalRevenueRes.rows[0].revenue || 0) }
+                { day: 'Today', sales: parseFloat(totalRevenueRes.rows[0].revenue || 0) }
             ];
         }
 
@@ -163,17 +221,19 @@ const getAdminDashboard = async (req, res) => {
             success: true,
             data: {
                 stats: {
-                    total_users: parseInt(totalUsersRes.rows[0].count || 0),
-                    active_users: parseInt(activeUsersRes.rows[0].count || 0),
-                    total_products: parseInt(totalProductsRes.rows[0].count || 0),
-                    active_products: parseInt(activeProductsRes.rows[0].count || 0),
-                    total_orders: parseInt(totalOrdersRes.rows[0].count || 0),
-                    pending_orders: parseInt(pendingOrdersRes.rows[0].count || 0),
-                    total_referrals: parseInt(totalReferralsRes.rows[0].count || 0),
-                    total_revenue: parseFloat(totalRevenueRes.rows[0].revenue || 0)
+                    totalUsers: parseInt(totalUsersRes.rows[0].count || 0),
+                    totalProducts: parseInt(totalProductsRes.rows[0].count || 0),
+                    activeContests: parseInt(activeContestsRes.rows[0].count || 0),
+                    totalOrders: parseInt(totalOrdersRes.rows[0].count || 0),
+                    totalRevenue: parseFloat(totalRevenueRes.rows[0].revenue || 0),
+                    totalSlotBookings: parseInt(totalSlotBookingsRes.rows[0].count || 0),
+                    winnersCount: parseInt(winnersRes.rows[0].count || 0),
+                    cashbackCount: parseInt(cashbackRes.rows[0].count || 0),
+                    buyRemainingCount: parseInt(buyRemainingRes.rows[0].count || 0)
                 },
-                sales: salesList,
-                recentOrders: formattedOrders
+                salesTrend: salesList,
+                recentOrders: formattedOrders,
+                topProducts: formattedTopProducts
             }
         });
 
