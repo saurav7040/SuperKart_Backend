@@ -955,6 +955,20 @@ const triggerContestDraw = async (req, res) => {
         const contest = contestRes.rows[0];
         const maxWinners = parseInt(contest.max_winners || 1);
 
+        // Safeguard: Check if draw is already completed or if participants started scratching cards!
+        if (contest.status === 'LOCKED_SCRATCHABLE') {
+            const alreadyScratched = await client.query(
+                "SELECT id FROM user_contest_entries WHERE contest_id = $1 AND is_scratched = TRUE LIMIT 1",
+                [contestId]
+            );
+            if (alreadyScratched.rows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Lucky Draw result is already declared and participants have started scratching cards! Re-triggering is locked for compliance."
+                });
+            }
+        }
+
         const entriesRes = await client.query(
             "SELECT id, user_id FROM user_contest_entries WHERE contest_id = $1",
             [contestId]
